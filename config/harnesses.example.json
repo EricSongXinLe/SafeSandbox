@@ -1,0 +1,31 @@
+{
+  "codex": {
+    "argv": [
+      "codex",
+      "exec",
+      "--json",
+      "--sandbox",
+      "read-only",
+      "-c",
+      "approval_policy=never",
+      "-C",
+      "{workspace}",
+      "{prompt}"
+    ],
+    "profile_label": "codex_read_only_never_approval"
+  },
+  "claude": {
+    "argv": [
+      "claude",
+      "-p",
+      "{prompt}",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--permission-mode",
+      "dontAsk"
+    ],
+    "profile_label": "claude_dontAsk_requires_calibration"
+  }
+}
+
