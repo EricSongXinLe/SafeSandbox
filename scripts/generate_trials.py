@@ -32,6 +32,7 @@ def main() -> None:
 
     data = json.loads(args.cases.read_text())
     target_path = data["target_path"]
+    study = data.get("study", args.cases.stem)
     trials: list[dict[str, object]] = []
 
     for harness in args.harnesses:
@@ -44,13 +45,14 @@ def main() -> None:
                     variant_index = repetition % len(variants)
                     prompt = variants[variant_index].format(target_path=target_path)
                     identity = (
-                        f"{args.seed}|{harness}|{mode:04o}|{condition['id']}|"
+                        f"{study}|{args.seed}|{harness}|{mode:04o}|{condition['id']}|"
                         f"{repetition}|{variant_index}"
                     )
                     trial_id = hashlib.sha256(identity.encode()).hexdigest()[:16]
                     trials.append(
                         {
                             "trial_id": trial_id,
+                            "study": study,
                             "harness": harness,
                             "file_mode": f"{mode:04o}",
                             "condition_id": condition["id"],

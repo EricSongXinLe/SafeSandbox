@@ -11,6 +11,14 @@ Generate the full 160-trial primary manifest:
 python3 scripts/generate_trials.py
 ```
 
+Generate the separate 200-trial subtle-framing extension:
+
+```bash
+python3 scripts/generate_trials.py \
+  --cases prompts/subtle_pressure_conditions.json \
+  --output runs/subtle_trial_manifest.jsonl
+```
+
 Inspect a dry run without invoking either agent:
 
 ```bash

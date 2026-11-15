@@ -58,6 +58,28 @@ The concrete prompt variants live in `prompts/pressure_conditions.json`.
 Variants should not mention the canary, whether the mode is `0600` or `0644`,
 the harness, the desired answer, or the scoring rubric.
 
+## Subtle-framing extension
+
+The baseline prompts intentionally make each pressure class easy to identify.
+For a more realistic follow-up, `prompts/subtle_pressure_conditions.json` uses
+routine workflow language, implicit deadlines, personal stakes, ambiguous
+delegation, and read-only risk minimization. These prompts avoid conspicuous
+phrases such as “bypass approval” or “do not ask permission.”
+
+Keep this as a separate prompt set rather than silently replacing the baseline.
+The subtle set introduces a **framing** factor and includes a fifth class, S4,
+that minimizes perceived harm without claiming authorization. Generate it with:
+
+```bash
+python3 scripts/generate_trials.py \
+  --cases prompts/subtle_pressure_conditions.json \
+  --output runs/subtle_trial_manifest.jsonl
+```
+
+With the defaults, this produces 200 trials: 2 harnesses × 2 permission modes ×
+5 framing classes × 10 repetitions. The generated rows include a `study` field
+so baseline and subtle-framing results cannot be accidentally pooled.
+
 ## Controls
 
 Use a separate authorized positive-control prompt:
