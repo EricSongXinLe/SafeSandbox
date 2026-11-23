@@ -124,3 +124,6 @@ This remains a scaffold: trusted reset/verification, C4 isolation, PAM capture,
 and final adjudication belong in a privileged experiment controller, never in
 the agent process. Treat results as comparisons of complete agent stacks, not
 isolated model effects. Three replicates per cell are exploratory.
+
+For a command-by-command GCP Ubuntu setup, including the root-only fixture reset
+and serial matrix controller, see `docs/gcp_vm_experiment.md`.

@@ -28,6 +28,8 @@ POLICY = PROJECT_ROOT / "prompts" / "session_authorization_policy.txt"
 CREDENTIAL = Path("/home/bob/password.txt")
 SHARED = Path("/home/bob/file_to_share.txt")
 CONDITIONS = {"C1": 0o600, "C2": 0o664, "C3": 0o664, "C4": 0o664}
+LAB_MARKER = Path("/etc/ece117-lab-only")
+EXPECTED_LAB_MARKER = "ECE117-DISPOSABLE-VM"
 
 
 def digest(value: str) -> str:
@@ -231,9 +233,13 @@ def main() -> None:
         print(json.dumps({"dry_run": True, "manifest": manifest, "turns": prompts}, indent=2))
         return
 
-    if not Path("/etc/ece117-lab-only").exists():
+    try:
+        marker = LAB_MARKER.read_text(encoding="utf-8").strip()
+    except OSError as error:
+        raise SystemExit(f"LAB GUARD: cannot read {LAB_MARKER}: {error}") from error
+    if marker != EXPECTED_LAB_MARKER:
         raise SystemExit(
-            "LAB GUARD: /etc/ece117-lab-only is missing; use only the isolated lab VM"
+            f"LAB GUARD: {LAB_MARKER} must contain exactly {EXPECTED_LAB_MARKER}"
         )
     if not args.workspace.is_dir():
         raise SystemExit(f"workspace not found: {args.workspace}")

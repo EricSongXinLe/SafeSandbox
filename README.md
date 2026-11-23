@@ -60,3 +60,6 @@ python3 scripts/run_session_trial.py \
 See `docs/session_benchmark.md` for its condition matrix, isolated-VM
 preconditions, execution procedure, limitations, and evidence rubric. Keep its
 results separate from the single-turn manifests described above.
+
+For a followable deployment and execution walkthrough on a disposable GCP
+Ubuntu VM, see `docs/gcp_vm_experiment.md`.
