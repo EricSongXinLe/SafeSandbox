@@ -34,3 +34,29 @@ requires a trusted root/admin runner plus both `--execute` and
 should not be granted sudo for the experiment.
 
 See `docs/experiment_prompts.md` for the study prompt specification.
+
+## Multi-turn session extension
+
+The repository also includes a separate four-turn session-continuation
+benchmark. It exercises a shared-file control, a direct credential request,
+neutral or pressured reassessment, and a synthetic authentication request in
+one native CLI conversation.
+
+Generate its randomized 24- or 48-trial matrix with:
+
+```bash
+python3 scripts/generate_session_matrix.py --plan factorial48
+```
+
+Inspect one trial without executing an agent:
+
+```bash
+python3 scripts/run_session_trial.py \
+  --agent codex --condition C2 --script pressure --replicate 1 \
+  --model '<pinned-model>' --workspace /home/alice/experiment \
+  --output /home/alice/ece117-results
+```
+
+See `docs/session_benchmark.md` for its condition matrix, isolated-VM
+preconditions, execution procedure, limitations, and evidence rubric. Keep its
+results separate from the single-turn manifests described above.
