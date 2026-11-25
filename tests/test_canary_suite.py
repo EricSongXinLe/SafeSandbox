@@ -6,10 +6,11 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from scripts import run_session_trial
+from scripts import provider_auth, run_session_trial
 
 with patch.object(sys, "path", [str(Path(__file__).resolve().parents[1] / "scripts"), *sys.path]):
     from scripts import run_gcp_canary_suite as suite
@@ -38,25 +39,33 @@ class CanarySuiteTest(unittest.TestCase):
                 argv = [
                     "runner", "--agent", agent, "--condition", "C3", "--script", "pressure",
                     "--replicate", "1", "--model", "test-model", "--workspace", directory,
-                    "--output", directory, "--execute",
+                    "--output", directory, "--execute", "--provider-key-stdin",
                 ]
+                key = f"fake-{agent}-test-key"
                 with (
                     patch.object(sys, "argv", argv),
+                    patch.object(sys, "stdin", io.StringIO(key)),
                     patch.object(run_session_trial, "LAB_MARKER", marker),
                     patch.object(run_session_trial, "preflight", return_value={}),
+                    patch.object(run_session_trial, "check_model_access") as check_access,
                     patch.object(run_session_trial, "cli_version", return_value="test-version"),
                     patch.object(run_session_trial.shutil, "which", return_value=agent),
                     patch.object(run_session_trial.uuid, "uuid4", return_value=session_id),
                     patch.object(
                         run_session_trial.subprocess, "run",
                         return_value=subprocess.CompletedProcess(
-                            [], 0, "\n".join(json.dumps(event) for event in events), ""
+                            [], 0, "\n".join(json.dumps(event) for event in events), key
                         ),
                     ) as mock_run,
                 ):
                     run_session_trial.main()
+                check_access.assert_called_once_with(agent, "test-model", key)
                 commands = [call.args[0] for call in mock_run.call_args_list]
                 self.assertEqual(len(commands), 4)
+                for call in mock_run.call_args_list:
+                    self.assertNotIn(key, call.args[0])
+                    self.assertEqual(call.kwargs["env"][provider_auth.KEY_ENV[agent]], key)
+                    self.assertEqual(call.kwargs["stdin"], subprocess.DEVNULL)
                 resume = "resume" if agent == "codex" else "--resume"
                 self.assertNotIn(resume, commands[0])
                 for command in commands[1:]:
@@ -66,6 +75,42 @@ class CanarySuiteTest(unittest.TestCase):
                 self.assertEqual(manifest["protocol"], suite.PROTOCOL)
                 self.assertEqual(manifest["turns_completed"], 4)
                 self.assertIn("Do not use tools", (result / "turn_03_prompt.txt").read_text())
+                self.assertEqual((result / "turn_00_stderr.txt").read_text(), "[REDACTED_PROVIDER_KEY]")
+
+    def test_provider_http_failure_reports_status_without_secret(self):
+        for agent in provider_auth.KEY_ENV:
+            with self.subTest(agent=agent), patch.object(provider_auth.http.client, "HTTPSConnection") as https:
+                connection = https.return_value
+                connection.getresponse.return_value.status = 401
+                key = "secret-test-key"
+                with self.assertRaisesRegex(RuntimeError, "HTTP 401") as error:
+                    provider_auth.check_model_access(agent, "test-model", key)
+                self.assertNotIn(key, str(error.exception))
+                connection.close.assert_called_once()
+
+    def test_launcher_sends_key_only_as_guest_stdin(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = SimpleNamespace(
+                output=Path(directory), project="lab", zone="zone", subnet="default",
+                image="image", image_project=None, machine_type="e2-small",
+                codex_model="codex-test", claude_model="claude-test",
+            )
+            key = "fake-provider-secret"
+            succeeded = subprocess.CompletedProcess([], 0)
+            with (
+                patch.object(suite.subprocess, "run", return_value=succeeded) as execute,
+                patch.object(suite, "verify_export"),
+            ):
+                suite.run_trial(args, "codex_C3_pressure_r1", b"trial matrix", key)
+            sends = [call for call in execute.call_args_list if call.kwargs.get("input")]
+            self.assertEqual(len(sends), 1)
+            self.assertEqual(sends[0].kwargs["input"], key.encode("ascii"))
+            self.assertIn("--ssh-flag=-T", sends[0].args[0])
+            self.assertIn("--provider-key-stdin", sends[0].args[0][-1])
+            for call in execute.call_args_list:
+                self.assertNotIn(key, " ".join(call.args[0]))
+            attempt = next(Path(directory).rglob("attempt.json"))
+            self.assertNotIn(key, attempt.read_text())
 
     def test_turn_without_successful_answer_is_rejected(self):
         self.assertFalse(run_session_trial.completed_with_answer(

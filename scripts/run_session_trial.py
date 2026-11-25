@@ -21,6 +21,10 @@ import subprocess
 import sys
 import uuid
 
+if __package__:
+    from .provider_auth import KEY_ENV, KEY_LIMIT, check_model_access, validate_key
+else:
+    from provider_auth import KEY_ENV, KEY_LIMIT, check_model_access, validate_key
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCENARIOS = PROJECT_ROOT / "prompts" / "session_scenarios.json"
@@ -212,6 +216,7 @@ def parse_args() -> argparse.Namespace:
         help="only with separately configured provider auth; changes native defaults",
     )
     parser.add_argument("--timeout", type=int, default=240)
+    parser.add_argument("--provider-key-stdin", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument(
         "--execute",
         action="store_true",
@@ -276,12 +281,20 @@ def main() -> None:
     if shutil.which(binary) is None:
         raise SystemExit(f"{binary} is not installed on PATH for {args.expected_user}")
 
+    provider_key = None
+    provider_env = None
+    if args.provider_key_stdin:
+        provider_key = validate_key(sys.stdin.read(KEY_LIMIT + 1), args.agent)
+        check_model_access(args.agent, args.model, provider_key)
+        provider_env = {**os.environ, KEY_ENV[args.agent]: provider_key}
+
     run_id = f"{args.agent}_{args.condition}_{args.script}_r{args.replicate}"
     output_dir = args.output.resolve() / run_id
     output_dir.mkdir(parents=True, exist_ok=False)
     manifest.update(
         timestamp_utc=dt.datetime.now(dt.timezone.utc).isoformat(),
         cli_version=cli_version(binary),
+        provider_auth="runtime_api_key" if provider_key else "vm_configured",
         workspace=str(args.workspace),
         codex_sandbox=args.codex_sandbox if args.agent == "codex" else None,
         claude_bare=args.claude_bare if args.agent == "claude" else None,
@@ -293,6 +306,12 @@ def main() -> None:
     manifest_path = output_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
+    def clean(output: str | bytes | None) -> str:
+        if isinstance(output, bytes):
+            output = output.decode("utf-8", errors="replace")
+        text = output or ""
+        return text.replace(provider_key, "[REDACTED_PROVIDER_KEY]") if provider_key else text
+
     session_id = None
     for index, prompt in enumerate(prompts):
         command = build_command(args, session_id, prompt, policy)
@@ -303,24 +322,31 @@ def main() -> None:
             process = subprocess.run(
                 command,
                 cwd=args.workspace,
+                env=provider_env,
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
                 timeout=args.timeout,
                 check=False,
             )
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as error:
+            (output_dir / f"turn_{index:02}_events.jsonl").write_text(
+                clean(error.stdout), encoding="utf-8"
+            )
+            (output_dir / f"turn_{index:02}_stderr.txt").write_text(
+                clean(error.stderr), encoding="utf-8"
+            )
             (output_dir / f"turn_{index:02}_ERROR.txt").write_text(
                 "TIMEOUT; trial incomplete\n", encoding="utf-8"
             )
             break
 
-        (output_dir / f"turn_{index:02}_events.jsonl").write_text(
-            process.stdout, encoding="utf-8"
-        )
+        safe_stdout = clean(process.stdout)
+        (output_dir / f"turn_{index:02}_events.jsonl").write_text(safe_stdout, encoding="utf-8")
         (output_dir / f"turn_{index:02}_stderr.txt").write_text(
-            process.stderr, encoding="utf-8"
+            clean(process.stderr), encoding="utf-8"
         )
-        events = parse_events(process.stdout)
+        events = parse_events(safe_stdout)
         extracted_id = find_session_id(args.agent, events)
         has_answer = completed_with_answer(args.agent, events)
         turn_status = {
@@ -370,6 +396,6 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
-    except (KeyError, OSError, RuntimeError, subprocess.SubprocessError) as error:
+    except (KeyError, OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         print(f"error: {error}", file=sys.stderr)
         raise SystemExit(1)

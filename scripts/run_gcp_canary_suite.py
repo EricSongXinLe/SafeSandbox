@@ -10,11 +10,13 @@ import os
 from pathlib import Path
 import shlex
 import subprocess
+import sys
 import tarfile
 import time
 import uuid
 
 from run_session_matrix import ARTIFACT_NAMES, MAX_ARTIFACT_BYTES, PROTOCOL, read_matrix, trial_id
+from provider_auth import KEY_LIMIT, prompt_provider_keys, validate_key
 
 
 def verify_export(path: Path, name: str) -> None:
@@ -64,10 +66,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--claude-model", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--execute", action="store_true", help="create billable VMs; default is a plan")
+    auth = parser.add_mutually_exclusive_group()
+    auth.add_argument("--provider-keys-stdin", action="store_true", help=argparse.SUPPRESS)
+    auth.add_argument("--prompt-provider-keys", action="store_true",
+                      help="prompt for the selected trial providers' API keys")
     return parser.parse_args()
 
 
-def run_trial(args: argparse.Namespace, name: str, matrix_bytes: bytes) -> None:
+def run_trial(
+    args: argparse.Namespace, name: str, matrix_bytes: bytes, provider_key: str | None = None
+) -> None:
     attempt = uuid.uuid4().hex[:12]
     vm = f"ece117-canary-{attempt}"
     destination = args.output / name / attempt
@@ -120,14 +128,19 @@ def run_trial(args: argparse.Namespace, name: str, matrix_bytes: bytes) -> None:
             ],
             stdout=log, stderr=subprocess.STDOUT, check=True, timeout=300,
         )
-        guest = shlex.join([
+        guest_args = [
             "sudo", "-n", "python3", "/opt/ece117/scripts/run_session_matrix.py",
             "--matrix", "ece117-matrix.csv", "--trial-id", name,
             f"--codex-model={args.codex_model}", f"--claude-model={args.claude_model}",
             "--execute",
-        ])
+        ]
+        if provider_key is not None:
+            guest_args.append("--provider-key-stdin")
+        guest = shlex.join(guest_args)
         result = subprocess.run(
-            [*ssh, f"--command={guest}"], stdout=log, stderr=subprocess.STDOUT,
+            [*ssh, "--ssh-flag=-T", f"--command={guest}"],
+            input=provider_key.encode("ascii") if provider_key is not None else None,
+            stdout=log, stderr=subprocess.STDOUT,
             timeout=1500, check=False,
         )
         export = destination / "evidence.tar.gz"
@@ -165,9 +178,21 @@ def main() -> None:
         print(f"Dry run: {len(names)} VM(s) in {args.project}/{args.zone}")
         print("\n".join(names))
         return
+    agents = tuple(sorted({name.partition("_")[0] for name in names}))
+    try:
+        keys: dict[str, str] = {}
+        if args.provider_keys_stdin:
+            supplied = json.loads(sys.stdin.read(KEY_LIMIT * 2 + 100))
+            if not isinstance(supplied, dict):
+                raise ValueError("invalid runtime provider key input")
+            keys = {agent: validate_key(supplied.get(agent), agent) for agent in agents}
+        elif args.prompt_provider_keys:
+            keys = prompt_provider_keys(agents)
+    except (OSError, ValueError, EOFError) as error:
+        raise SystemExit(f"provider input error: {error}") from None
     for name in names:
         try:
-            run_trial(args, name, matrix_bytes)
+            run_trial(args, name, matrix_bytes, keys.get(name.partition("_")[0]))
         except (KeyError, OSError, ValueError, subprocess.SubprocessError, tarfile.TarError) as error:
             raise SystemExit(
                 f"{name} failed: {error}. Check attempt.json and operator.log. "

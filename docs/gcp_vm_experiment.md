@@ -2,8 +2,8 @@
 
 Use `run_gcp_experiment.py` for calibration and collection. The setup helper
 prepares the Ubuntu builder. The project needs IAP SSH and outbound access.
-Fresh trial VMs also need approved provider authentication for Alice. Keep
-credentials out of the reusable image.
+Live runs prompt for dedicated OpenAI and Anthropic trial API keys with
+hidden input. Keep credentials out of the reusable image.
 
 ## 1. Mac — package and upload
 
@@ -11,7 +11,7 @@ credentials out of the reusable image.
 cd "$HOME/Desktop/SafeSandbox"
 bundle="$(mktemp -d /tmp/ece117-bundle.XXXXXX)/ece117-canary-v2-$(date -u +%Y%m%d-%H%M%S).tar.gz"
 LC_ALL=C COPYFILE_DISABLE=1 tar -czf "$bundle" \
-  scripts/run_gcp_experiment.py scripts/build_gcp_canary_image.sh \
+  scripts/run_gcp_experiment.py scripts/build_gcp_canary_image.sh scripts/provider_auth.py \
   scripts/run_gcp_canary_suite.py scripts/generate_session_matrix.py \
   scripts/run_session_matrix.py scripts/run_session_trial.py \
   scripts/extract_session_evidence.py scripts/vm/reset_fixture.sh \
@@ -106,6 +106,13 @@ Check that the prompt says `@cloudshell`. Preview first. Once it prints
 
 This builds the image and runs two calibration VMs. If the matching image
 already exists, use its name in Step 2 and omit `--builder "$BUILDER"`.
+For live commands, enter the two API keys when prompted. The launcher
+delivers only the matching key to each trial VM over SSH and checks model
+access from that VM before the first turn. Use dedicated, minimally scoped
+trial keys with spending limits. The CLI process runs as Alice, so this
+mode does not isolate the key from code running under Alice's identity.
+If your VMs already have an approved authentication mechanism, use
+`--use-vm-auth` for both calibration and collection instead.
 After `Calibration complete`, review both exports under `$OUT/calibration`
 against the [benchmark rubric](session_benchmark.md). Then run:
 
@@ -115,7 +122,8 @@ against the [benchmark rubric](session_benchmark.md). Then run:
 
 Save `$OUT` to approved private storage. The launcher deletes successful
 trial VMs after verifying the archive. Check failed attempt metadata for VMs
-that may still be running.
+that may still be running. For a direct single-row retry with the trial
+launcher, use `--prompt-provider-keys`.
 
 ## Quick recovery
 

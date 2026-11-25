@@ -14,6 +14,7 @@ import tarfile
 import uuid
 
 from run_gcp_canary_suite import verify_export
+from provider_auth import prompt_provider_keys
 
 SCRIPTS = Path(__file__).resolve().parent
 CALIBRATION_IDS = ("codex_C3_pressure_r1", "claude_C3_pressure_r1")
@@ -30,6 +31,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--plan", choices=("focused24", "factorial48"), default="focused24")
     parser.add_argument("--builder", help="existing prepared Ubuntu builder with both CLIs installed")
     parser.add_argument("--execute", action="store_true", help="create billable resources")
+    parser.add_argument("--use-vm-auth", action="store_true",
+                        help="use authentication already provisioned on each trial VM")
     parser.add_argument("--calibration-reviewed", action="store_true",
                         help="confirm the exported calibration traces and selected controls were reviewed")
     return parser.parse_args()
@@ -39,7 +42,7 @@ def verify_bundle(path: Path, checksum: str) -> None:
     if hashlib.sha256(path.read_bytes()).hexdigest() != checksum:
         raise ValueError("bundle checksum differs from --sha256")
     with tarfile.open(path, "r:gz") as archive:
-        for script in ("run_gcp_experiment.py", "build_gcp_canary_image.sh",
+        for script in ("run_gcp_experiment.py", "build_gcp_canary_image.sh", "provider_auth.py",
                        "run_gcp_canary_suite.py", "generate_session_matrix.py",
                        "run_session_matrix.py", "run_session_trial.py"):
             content = archive.extractfile(f"scripts/{script}")
@@ -96,6 +99,8 @@ def main() -> None:
         if measured.exists():
             raise ValueError("measured output already exists; use the trial launcher for outstanding rows")
 
+    keys = {} if args.use_vm_auth else prompt_provider_keys()
+
     if args.builder:
         run(
             "bash", str(SCRIPTS / "build_gcp_canary_image.sh"), "build",
@@ -107,20 +112,25 @@ def main() -> None:
         "project": args.project, "zone": args.zone, "subnet": args.subnet,
         "image": args.image, "image_id": image_identity(args), "sha256": args.sha256,
         "plan": args.plan, "codex_model": args.codex_model, "claude_model": args.claude_model,
+        "provider_auth": "vm_configured" if args.use_vm_auth else "runtime_api_key",
     }
     matrix = args.output / f"{args.plan}.csv"
-    launcher = (
+    launcher = [
         sys.executable, str(SCRIPTS / "run_gcp_canary_suite.py"), "--matrix", str(matrix),
         "--project", args.project, "--zone", args.zone, "--subnet", args.subnet,
         "--image", args.image, "--codex-model", args.codex_model,
         "--claude-model", args.claude_model, "--execute",
-    )
+    ]
+    if keys:
+        launcher.append("--provider-keys-stdin")
     if args.phase == "calibrate":
         run(sys.executable, str(SCRIPTS / "generate_session_matrix.py"),
             "--plan", args.plan, "--seed", "117", "--output", str(matrix))
         calibration = args.output / "calibration" / uuid.uuid4().hex
         for name in CALIBRATION_IDS:
-            run(*launcher, "--trial-id", name, "--output", str(calibration))
+            agent = name.partition("_")[0]
+            key_input = json.dumps({agent: keys[agent]}) if keys else None
+            run(*launcher, "--trial-id", name, "--output", str(calibration), input=key_input, text=True)
             exports = list((calibration / name).glob("*/evidence.tar.gz"))
             if len(exports) != 1:
                 raise ValueError(f"expected one evidence archive for {name}")
@@ -140,11 +150,11 @@ def main() -> None:
         if record["matrix_sha256"] != hashlib.sha256(matrix.read_bytes()).hexdigest():
             raise ValueError("matrix changed after calibration")
         measured.mkdir()
-        run(*launcher, "--output", str(measured))
+        run(*launcher, "--output", str(measured), input=json.dumps(keys) if keys else None, text=True)
 
 
 if __name__ == "__main__":
     try:
         main()
-    except (KeyError, OSError, ValueError, subprocess.SubprocessError, tarfile.TarError) as error:
+    except (EOFError, KeyError, OSError, ValueError, subprocess.SubprocessError, tarfile.TarError) as error:
         raise SystemExit(f"error: {error}") from error

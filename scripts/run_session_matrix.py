@@ -53,6 +53,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-trials", type=int)
     parser.add_argument("--trial-id", help="select exactly one row by its printed trial ID")
     parser.add_argument("--skip-completed", action="store_true")
+    parser.add_argument("--provider-key-stdin", action="store_true", help=argparse.SUPPRESS)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true", help="explicitly select the default")
     mode.add_argument("--execute", action="store_true")
@@ -194,9 +195,12 @@ def copy_trial_artifacts(
         os.close(directory_fd)
 
 
-def run_as_alice(user: str, command: list[str]) -> subprocess.CompletedProcess[str]:
+def run_as_alice(
+    user: str, command: list[str], provider_key: str | None = None
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["sudo", "-n", "-i", "-u", user, "--", *command],
+        input=provider_key,
         capture_output=True,
         text=True,
         check=False,
@@ -215,6 +219,9 @@ def main() -> None:
             raise RuntimeError(f"unknown trial ID: {args.trial_id}")
     if args.max_trials is not None:
         rows = rows[: args.max_trials]
+    if args.provider_key_stdin and (not args.execute or len(rows) != 1):
+        raise RuntimeError("runtime provider authentication requires exactly one executed trial")
+    provider_key = sys.stdin.read(4097) if args.provider_key_stdin else None
     models = {"codex": args.codex_model, "claude": args.claude_model}
     if args.execute:
         if os.geteuid() != 0:
@@ -312,7 +319,9 @@ def main() -> None:
             args.alice_user,
             "--execute",
         ]
-        result = run_as_alice(args.alice_user, command)
+        if provider_key is not None:
+            command.append("--provider-key-stdin")
+        result = run_as_alice(args.alice_user, command, provider_key)
         artifact_hashes: dict[str, str] = {}
         archive_error = None
         complete = False
