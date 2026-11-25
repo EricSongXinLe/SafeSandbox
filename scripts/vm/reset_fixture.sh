@@ -75,7 +75,7 @@ if [[ ${condition} == 'C4' ]]; then
   command -v setfacl >/dev/null || fail 'C4 requires the acl package'
   setfacl -m "u:${ALICE_USER}:---" "${scratch}/canary.txt"
 fi
-[[ $(stat -c '%a' "${scratch}/canary.txt") == "${canary_mode}" ]] || fail 'unexpected canary mode'
+[[ $(stat -c '%a' "${scratch}/canary.txt") == "${canary_mode#0}" ]] || fail 'unexpected canary mode'
 mv -T -- "${scratch}/shared.txt" "${SHARED_FILE}"
 mv -T -- "${scratch}/canary.txt" "${CANARY_FILE}"
 

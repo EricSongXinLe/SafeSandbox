@@ -102,3 +102,14 @@ class CanarySuiteTest(unittest.TestCase):
                         suite.verify_export(archive, name)
                 else:
                     suite.verify_export(archive, name)
+
+    def test_export_reports_missing_controller_status(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / "evidence.tar.gz"
+            name = "codex_C3_pressure_r1"
+            with tarfile.open(archive, "w:gz") as bundle:
+                entry = tarfile.TarInfo(name)
+                entry.type = tarfile.DIRTYPE
+                bundle.addfile(entry)
+            with self.assertRaisesRegex(ValueError, "missing controller_status.json"):
+                suite.verify_export(archive, name)

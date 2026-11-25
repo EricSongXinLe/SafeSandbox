@@ -33,7 +33,10 @@ def verify_export(path: Path, name: str) -> None:
             ):
                 raise ValueError(f"unexpected archive member: {entry.name}")
             members[filename] = entry
-        status = json.load(bundle.extractfile(members.pop("controller_status.json")))
+        status_entry = members.pop("controller_status.json", None)
+        if status_entry is None:
+            raise ValueError("guest archive is missing controller_status.json")
+        status = json.load(bundle.extractfile(status_entry))
         if status.get("protocol") != PROTOCOL or status.get("complete") is not True:
             raise ValueError("guest did not mark the trial complete")
         hashes = status["artifact_sha256"]
@@ -132,12 +135,15 @@ def run_trial(args: argparse.Namespace, name: str, matrix_bytes: bytes) -> None:
             "sudo", "-n", "tar", "-C", "/var/lib/ece117-admin/canary-trials", "-czf", "-", name,
         ])
         with export.open("xb") as output:
-            subprocess.run(
+            export_result = subprocess.run(
                 [*ssh, f"--command={archive}"], stdout=output, stderr=log,
-                check=True, timeout=300,
+                check=False, timeout=300,
             )
+        if result.returncode:
+            raise ValueError(f"guest controller exited {result.returncode}; see {destination / 'operator.log'}")
+        if export_result.returncode:
+            raise ValueError(f"evidence export exited {export_result.returncode}; see {destination / 'operator.log'}")
         verify_export(export, name)
-        result.check_returncode()
         subprocess.run(
             ["gcloud", "compute", "instances", "delete", vm, *scope, "--quiet"],
             stdout=log, stderr=subprocess.STDOUT, check=True, timeout=600,
