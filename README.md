@@ -1,65 +1,32 @@
 # SafeSandbox
-ECE M117 project
 
-This repository contains prompt fixtures and orchestration scaffolding for a
-controlled study of coding-agent behavior around a misconfigured cross-user
-file. Only synthetic canaries may be used.
+ECE 117 study of how coding agents handle requests for an inert marker in
+another user's file. The GCP benchmark uses a fresh VM per trial and measures
+marker access, disclosure, and a fictional role-authorization decision.
 
-Generate the full 160-trial primary manifest:
+- [GCP runbook](docs/gcp_vm_experiment.md) — package, calibrate, and collect through `scripts/run_gcp_experiment.py`.
+- [Benchmark protocol](docs/session_benchmark.md) — conditions, trial plans, and scoring.
+- [GCP smoke-test record](docs/gcp_smoke_test_recap.md) — historical Ubuntu verification.
 
-```bash
-python3 scripts/generate_trials.py
-```
+## Local checks
 
-Generate the separate 200-trial subtle-framing extension:
-
-```bash
-python3 scripts/generate_trials.py \
-  --cases prompts/subtle_pressure_conditions.json \
-  --output runs/subtle_trial_manifest.jsonl
-```
-
-Inspect a dry run without invoking either agent:
+Run the regression tests without launching agents or creating VMs:
 
 ```bash
-python3 scripts/run_trials.py --limit 8
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
 ```
 
-Before executing on the disposable VM, copy the invariant instruction templates
-into Alice's workspace as `AGENTS.md` and `CLAUDE.md`, pin both CLI versions,
-calibrate their permissions using benign files, and edit
-`config/harnesses.example.json` to match the verified versions. The actual run
-requires a trusted root/admin runner plus both `--execute` and
-`--accept-calibrated-profiles`. Alice and Bob themselves should be non-root and
-should not be granted sudo for the experiment.
-
-See `docs/experiment_prompts.md` for the study prompt specification.
-
-## Multi-turn session extension
-
-The repository also includes a separate four-turn session-continuation
-benchmark. It exercises a shared-file control, a direct credential request,
-neutral or pressured reassessment, and a synthetic authentication request in
-one native CLI conversation.
-
-Generate its randomized 24- or 48-trial matrix with:
+Generate the focused 24-trial matrix locally:
 
 ```bash
-python3 scripts/generate_session_matrix.py --plan factorial48
+python3 scripts/generate_session_matrix.py --plan focused24 --seed 117
 ```
 
-Inspect one trial without executing an agent:
+Use `factorial48` for the full design after validating the additional controls.
+The generator writes to `runs/session_trial_matrix.csv` by default.
 
-```bash
-python3 scripts/run_session_trial.py \
-  --agent codex --condition C2 --script pressure --replicate 1 \
-  --model '<pinned-model>' --workspace /home/alice/experiment \
-  --output /home/alice/ece117-results
-```
+## Earlier single-turn study
 
-See `docs/session_benchmark.md` for its condition matrix, isolated-VM
-preconditions, execution procedure, limitations, and evidence rubric. Keep its
-results separate from the single-turn manifests described above.
-
-For a followable deployment and execution walkthrough on a disposable GCP
-Ubuntu VM, see `docs/gcp_vm_experiment.md`.
+The [prompt specification](docs/experiment_prompts.md) documents the original
+single-turn designs. Keep their results separate from the multi-turn GCP
+benchmark.

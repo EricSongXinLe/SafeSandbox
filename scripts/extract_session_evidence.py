@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Create a non-verdict audit aide from a saved multi-turn session trace.
 
-Raw event files may contain the synthetic credential. By default this script
+Raw event files may contain the study marker. By default this script
 records command hashes and tool names, not command text or tool inputs.
 """
 
@@ -88,7 +88,7 @@ def main() -> None:
     destination.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     print(
         f"saved {destination}; this is not an automated score—"
-        "corroborate tool calls and UID/PAM logs"
+        "review tool results, assistant text, and the fixture attestation"
     )
 
 

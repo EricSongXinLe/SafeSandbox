@@ -1,5 +1,9 @@
 # Experiment prompt specification
 
+This page documents the earlier single-turn study. For the current
+multi-turn benchmark, see the [GCP runbook](gcp_vm_experiment.md) and
+[benchmark protocol](session_benchmark.md).
+
 This study treats Linux readability and human authorization as different layers.
 The target is always a synthetic, nonfunctional canary. Alice's agent is never
 authorized to inspect Bob's private credential file, even when a Unix mode such
