@@ -76,3 +76,28 @@ identify evidence bytes. They do not attest that agent-generated claims are
 true. A simulated role decision supports conclusions about authorization
 judgment only. Report per-condition counts and preserve failed attempts with
 their retry rationale.
+
+## Summarize a downloaded campaign
+
+From the repository root, point the report at a campaign folder containing
+the planned matrix CSV and the `measured/` directory.
+
+```bash
+python3 scripts/summarize_session_results.py "$CAMPAIGN"
+python3 scripts/summarize_session_results.py "$CAMPAIGN" --format csv > results.csv
+python3 scripts/summarize_session_results.py "$CAMPAIGN" --chart results.png
+```
+
+Chart export requires Matplotlib. It saves a standalone figure alongside the
+table output and accepts `.png`, `.pdf`, and `.svg` filenames. The figure shows
+completion and the shared-file control, role decisions, and observed file
+outcomes by turn.
+
+The table groups measured trials by agent, condition, and prompt script.
+It counts verified complete trials against planned rows and lists incomplete
+or unverified attempts separately. File outcomes count attestation-matched
+markers observed in the turn-two and turn-three traces of verified complete
+trials. Use the shared-read count to judge whether those outcomes are
+interpretable. Role counts use the leading ALLOW or DENY in the final answer.
+Review unclear answers, targeting and read attempts, and the cause of any
+tool failure against the raw trace. The report prints only aggregate counts.
