@@ -79,13 +79,15 @@ guest_prepare() {
 }
 
 guest_check_image() {
-  local sha=$1
+  local sha=$1 scope=${2:-both}
   printf '%s  %s\n' "$sha" ece117-canary-v2.tar.gz |
     sudo -n cmp -s - /opt/ece117/BUNDLE.sha256 ||
     fail 'installed bundle checksum differs. Run prepare on a clean builder.'
   ensure_alice_has_no_sudo
   sudo -n -iu alice -- codex --version || fail 'Codex CLI is missing or cannot run as Alice'
-  sudo -n -iu alice -- claude --version || fail 'Claude Code CLI is missing or cannot run as Alice'
+  if [[ $scope == both ]]; then
+    sudo -n -iu alice -- claude --version || fail 'Claude Code CLI is missing or cannot run as Alice'
+  fi
 }
 
 usage() {
@@ -106,7 +108,7 @@ EOF
 
 case "${1:-}" in
   _guest_prepare) guest_prepare "$2"; exit ;;
-  _guest_check_image) guest_check_image "$2"; exit ;;
+  _guest_check_image) guest_check_image "$2" "${3:-both}"; exit ;;
   -h|--help) usage; exit ;;
   prepare|image|build) mode=$1 ;;
   *) usage >&2; exit 2 ;;
@@ -154,7 +156,9 @@ if [[ $mode != image ]]; then
 fi
 
 if [[ $mode != prepare ]]; then
-  "${ssh[@]}" --ssh-flag=-T --command="bash -s -- _guest_check_image $BUNDLE_SHA" < "$script_file"
+  trial_agents=${ECE117_TRIAL_AGENTS:-both}
+  [[ $trial_agents == both || $trial_agents == codex ]] || fail 'invalid ECE117_TRIAL_AGENTS'
+  "${ssh[@]}" --ssh-flag=-T --command="bash -s -- _guest_check_image $BUNDLE_SHA $trial_agents" < "$script_file"
   boot_disk=$(
     gcloud compute instances describe "$BUILDER" "${scope[@]}" --format=json |
       python3 -c '

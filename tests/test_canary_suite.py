@@ -14,9 +14,163 @@ from scripts import provider_auth, run_session_trial
 
 with patch.object(sys, "path", [str(Path(__file__).resolve().parents[1] / "scripts"), *sys.path]):
     from scripts import run_gcp_canary_suite as suite
+    from scripts import run_gcp_experiment as workflow
 
 
 class CanarySuiteTest(unittest.TestCase):
+    def test_wording_scripts_change_only_the_urgency_sentence(self):
+        scenario = json.loads(run_session_trial.SCENARIOS.read_text())
+        plain = run_session_trial.select_prompts(scenario, "plain")
+        urgent = run_session_trial.select_prompts(scenario, "urgency")
+        self.assertEqual(urgent, [*plain[:2], "This is urgent. " + plain[2], plain[3]])
+
+    def test_shared_control_requires_a_successful_result_from_the_shared_path(self):
+        shared = str(run_session_trial.SHARED)
+        expected = "known shared contents"
+        codex_item = {
+            "type": "command_execution", "command": f"cat {shared}",
+            "aggregated_output": expected, "exit_code": 0,
+        }
+        self.assertTrue(run_session_trial.shared_control_verified(
+            "codex", [{"type": "item.completed", "item": codex_item}], expected
+        ))
+        codex_item["exit_code"] = 1
+        self.assertFalse(run_session_trial.shared_control_verified(
+            "codex", [{"type": "item.completed", "item": codex_item}], expected
+        ))
+        use = {"type": "tool_use", "id": "read-1", "name": "Read", "input": {"file_path": shared}}
+        result = {"type": "tool_result", "tool_use_id": "read-1", "content": expected}
+        events = [
+            {"type": "assistant", "message": {"content": [use]}},
+            {"type": "user", "message": {"content": [result]}},
+        ]
+        self.assertTrue(run_session_trial.shared_control_verified("claude", events, expected))
+        result["tool_use_id"] = "different-read"
+        self.assertFalse(run_session_trial.shared_control_verified("claude", events, expected))
+
+    def test_wording_trial_stops_before_marker_prompt_if_control_is_unverified(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            marker = root / "lab"
+            marker.write_text(run_session_trial.EXPECTED_LAB_MARKER)
+            shared = root / "shared.txt"
+            shared.write_text("known shared contents")
+            argv = [
+                "runner", "--agent", "codex", "--condition", "C3", "--script", "plain",
+                "--replicate", "1", "--model", "test", "--workspace", directory,
+                "--output", directory, "--execute",
+            ]
+            events = [
+                {"type": "thread.started", "thread_id": "test-thread"},
+                {"type": "item.completed", "item": {"type": "agent_message", "text": "Shell failed."}},
+                {"type": "turn.completed"},
+            ]
+            result = subprocess.CompletedProcess([], 0, "\n".join(map(json.dumps, events)), "")
+            with (
+                patch.object(sys, "argv", argv),
+                patch.object(run_session_trial, "LAB_MARKER", marker),
+                patch.object(run_session_trial, "SHARED", shared),
+                patch.object(run_session_trial, "preflight", return_value={}),
+                patch.object(run_session_trial, "cli_version", return_value="test-version"),
+                patch.object(run_session_trial.shutil, "which", return_value="codex"),
+                patch.object(run_session_trial.subprocess, "run", return_value=result) as invoke,
+                self.assertRaises(SystemExit) as error,
+            ):
+                run_session_trial.main()
+            self.assertEqual(error.exception.code, 1)
+            invoke.assert_called_once()
+            trial = root / "codex_C3_plain_r1"
+            manifest = json.loads((trial / "manifest.json").read_text())
+            self.assertEqual(manifest["turns_completed"], 1)
+            self.assertEqual(manifest["termination_reason"], "shared_control_unverified")
+            self.assertFalse((trial / "turn_01_prompt.txt").exists())
+
+    def test_codex_only_campaign_can_collect_without_anthropic_credentials(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            matrix = output / "wording24-codex.csv"
+            matrix.write_text("test matrix")
+            shared_args = [
+                "--execute", "--codex-only", "--plan", "wording24",
+                "--project", "lab", "--zone", "zone", "--subnet", "default",
+                "--image", "image", "--codex-model", "codex-test",
+                "--bundle", str(output / "test.tar.gz"), "--sha256", "test", "--output", directory,
+            ]
+            with (
+                patch.object(workflow, "verify_bundle"),
+                patch.object(workflow, "image_identity", return_value="image-id"),
+                patch.object(workflow, "verified_attempt", return_value=output / "evidence.tar.gz"),
+                patch.object(workflow, "prompt_provider_keys", return_value={"codex": "test-key"}) as prompt,
+                patch.object(workflow, "run") as run,
+            ):
+                with patch.object(sys, "argv", ["workflow", "calibrate", *shared_args]):
+                    workflow.main()
+                self.assertIn("--codex-only", run.call_args_list[0].args)
+                self.assertIn("codex_C3_plain_r1", run.call_args.args)
+                receipt = json.loads((output / "calibration.json").read_text())
+                self.assertEqual(receipt["configuration"]["agent_scope"], "codex")
+                with patch.object(sys, "argv", ["workflow", "collect", "--calibration-reviewed", *shared_args]):
+                    workflow.main()
+                self.assertEqual(json.loads(run.call_args.kwargs["input"]), {"codex": "test-key"})
+            self.assertEqual([call.args for call in prompt.call_args_list], [(("codex",),), (("codex",),)])
+
+    def test_resume_prompts_only_for_missing_agent_and_preserves_codex(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            calibration = output / "calibration" / "previous"
+            calibration.mkdir(parents=True)
+            (output / "focused24.csv").write_text("test matrix")
+            codex, claude = workflow.CALIBRATION_IDS
+            codex_archive = calibration / codex / "codex-attempt" / "evidence.tar.gz"
+            claude_archive = calibration / claude / "claude-attempt" / "evidence.tar.gz"
+            argv = [
+                "workflow", "calibrate", "--execute", "--resume-calibration", str(calibration),
+                "--project", "lab", "--zone", "zone", "--subnet", "default",
+                "--image", "image", "--codex-model", "codex-test", "--claude-model", "claude-test",
+                "--bundle", str(output / "test.tar.gz"), "--sha256", "test", "--output", directory,
+            ]
+            with (
+                patch.object(sys, "argv", argv),
+                patch.object(workflow, "verify_bundle"),
+                patch.object(workflow, "image_identity", return_value="image-id"),
+                patch.object(workflow, "verified_attempt", side_effect=[codex_archive, None, claude_archive]),
+                patch.object(workflow, "prompt_provider_keys", return_value={"claude": "test-key"}) as prompt,
+                patch.object(workflow, "run") as run,
+            ):
+                workflow.main()
+            prompt.assert_called_once_with(("claude",))
+            run.assert_called_once()
+            self.assertIn(claude, run.call_args.args)
+            self.assertNotIn(codex, run.call_args.args)
+            receipt = json.loads((output / "calibration.json").read_text())
+            self.assertEqual(receipt["exports"], {
+                codex: str(codex_archive.resolve()), claude: str(claude_archive.resolve()),
+            })
+
+    def test_codex_only_calibration_does_not_unlock_collection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            (output / "focused24.csv").write_text("test matrix")
+            argv = [
+                "workflow", "calibrate", "--agent", "codex", "--execute",
+                "--project", "lab", "--zone", "zone", "--subnet", "default",
+                "--image", "image", "--codex-model", "codex-test", "--claude-model", "claude-test",
+                "--bundle", str(output / "test.tar.gz"), "--sha256", "test", "--output", directory,
+            ]
+            with (
+                patch.object(sys, "argv", argv),
+                patch.object(workflow, "verify_bundle"),
+                patch.object(workflow, "image_identity", return_value="image-id"),
+                patch.object(workflow, "verified_attempt", return_value=output / "evidence.tar.gz"),
+                patch.object(workflow, "prompt_provider_keys", return_value={"codex": "test-key"}) as prompt,
+                patch.object(workflow, "run") as run,
+            ):
+                workflow.main()
+            prompt.assert_called_once_with(("codex",))
+            self.assertEqual(run.call_count, 2)  # Matrix generation and one trial.
+            self.assertIn(workflow.CALIBRATION_IDS[0], run.call_args.args)
+            self.assertFalse((output / "calibration.json").exists())
+
     def test_runner_resumes_both_harnesses_for_four_turns(self):
         for agent in ("codex", "claude"):
             with self.subTest(agent=agent), tempfile.TemporaryDirectory() as directory:

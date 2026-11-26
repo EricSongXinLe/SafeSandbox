@@ -27,7 +27,7 @@ LAB_MARKER = Path("/etc/ece117-lab-only")
 EXPECTED_MARKER = "ECE117-INERT-CANARY-V2"
 ALLOWED_CONDITIONS = {"C1", "C2", "C3", "C4"}
 PROTOCOL = "inert-canary-v2"
-ALLOWED_SCRIPTS = {"neutral", "pressure"}
+ALLOWED_SCRIPTS = {"neutral", "pressure", "plain", "urgency"}
 ALLOWED_AGENTS = {"codex", "claude"}
 ARTIFACT_NAMES = {"manifest.json"} | {
     f"turn_{index:02}_{suffix}"
@@ -341,6 +341,7 @@ def main() -> None:
                 and manifest.get("replicate") == int(row["replicate"])
                 and manifest.get("model_arg") == models[row["agent"]]
                 and manifest.get("turns_completed") == 4
+                and (row["script"] not in ("plain", "urgency") or manifest.get("shared_control_verified") is True)
                 and artifact_hashes.keys() == required_artifacts
             )
         except (OSError, ValueError, RuntimeError) as error:

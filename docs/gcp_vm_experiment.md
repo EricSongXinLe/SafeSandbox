@@ -2,8 +2,8 @@
 
 Use `run_gcp_experiment.py` for calibration and collection. The setup helper
 prepares the Ubuntu builder. The project needs IAP SSH and outbound access.
-Live runs prompt for dedicated OpenAI and Anthropic trial API keys with
-hidden input. Keep credentials out of the reusable image.
+Live runs prompt for the selected agents’ trial API keys with hidden input.
+Keep credentials out of the reusable image.
 
 ## 1. Mac — package and upload
 
@@ -51,7 +51,7 @@ if printf '%s  %s\n' "$BUNDLE_SHA" "$BUNDLE" | sha256sum -c - &&
   workflow=(python3 "$operator_dir/scripts/run_gcp_experiment.py"
     --project "$PROJECT" --zone "$ZONE" --subnet "$SUBNET" --image "$IMAGE"
     --bundle "$BUNDLE" --sha256 "$BUNDLE_SHA" --output "$OUT"
-    --codex-model gpt-6.2-sol --claude-model claude-sonnet-5-5)
+    --codex-model gpt-6-luna --claude-model claude-sonnet-5-5)
   printf 'Bundle extracted to: %s\n' "$operator_dir"
 else
   unset operator_dir
@@ -62,6 +62,23 @@ fi
 Continue after `Bundle extracted to:`. The default plan is `focused24`
 (C2/C3). For `factorial48`, add `--plan factorial48` inside the array and
 validate C1/C4 in both native harnesses before collection.
+
+For the matched plain-versus-urgency study, add the plan to the array once:
+
+```bash
+workflow+=(--plan wording24)
+```
+
+While you have only the OpenAI key, add `--codex-only` as well:
+
+```bash
+workflow+=(--codex-only)
+```
+
+That makes `wording24` a **12-trial Codex-only campaign**. Keep the flag for both
+calibration and collection, and use a separate output directory for any
+later two-agent campaign. Package the updated bundle and use a clean
+builder and a new image for the wording protocol.
 
 ## 3. Builder — prepare and install the CLIs
 
@@ -78,8 +95,9 @@ If the VM already exists, omit `--create-builder`. If it already reports
 gcloud compute ssh "$BUILDER" --project="$PROJECT" --zone="$ZONE" --tunnel-through-iap
 ```
 
-On the **builder VM**, install any missing CLI as Alice and verify both
-versions. If the team has pinned releases, use those exact versions.
+On the **builder VM**, install any missing CLI as Alice and verify the
+versions. For a Codex-only campaign, skip the two `claude` lines. If the team
+has pinned releases, use those exact versions.
 [OpenAI installer](https://learn.chatgpt.com/docs/codex/cli) · [Claude Code installer](https://code.claude.com/docs/en/setup)
 
 ```bash
@@ -89,7 +107,7 @@ sudo -iu alice bash -lc 'codex --version'
 sudo -iu alice bash -lc 'claude --version'
 ```
 
-Record both versions, then type `exit` to return to **Cloud Shell**.
+Record the installed versions, then type `exit` to return to **Cloud Shell**.
 
 ## 4. Cloud Shell — calibrate and collect
 
@@ -104,16 +122,31 @@ Check that the prompt says `@cloudshell`. Preview first. Once it prints
 "${workflow[@]}" calibrate --builder "$BUILDER" --execute
 ```
 
-This builds the image and runs two calibration VMs. If the matching image
+This builds the image and runs one calibration VM per selected agent. If the matching image
 already exists, use its name in Step 2 and omit `--builder "$BUILDER"`.
-For live commands, enter the two API keys when prompted. The launcher
+For live commands, enter the requested API keys at the hidden prompts. The launcher
 delivers only the matching key to each trial VM over SSH and checks model
 access from that VM before the first turn. Use dedicated, minimally scoped
 trial keys with spending limits. The CLI process runs as Alice, so this
 mode does not isolate the key from code running under Alice's identity.
 If your VMs already have an approved authentication mechanism, use
 `--use-vm-auth` for both calibration and collection instead.
-After `Calibration complete`, review both exports under `$OUT/calibration`
+
+To pause Claude **within a two-agent campaign**, run
+`"${workflow[@]}" calibrate --agent codex --execute` using the ready image.
+This saves partial evidence and keeps collection locked. Use `--codex-only`
+instead when you intend to collect Codex-only results.
+To continue that run later, use `calibrate --resume-calibration RUN_DIR --execute`
+with the printed run directory under `$OUT/calibration`. The workflow verifies
+the existing exports and prompts only for the agents still pending. Keep
+the same image, bundle, matrix, and model IDs.
+
+In `wording24`, the runner stops after turn one if the tool trace cannot
+verify a successful read of the authorized shared file. Inspect the failed
+control before retrying. The earlier Codex archive with a sandbox startup
+error does not satisfy this gate.
+
+After `Calibration complete`, review the exports under `$OUT/calibration`
 against the [benchmark rubric](session_benchmark.md). Then run:
 
 ```bash

@@ -23,6 +23,10 @@ PLANS = {
         "conditions": ("C2", "C3"),
         "scripts": ("neutral", "pressure"),
     },
+    "wording24": {
+        "conditions": ("C2", "C3"),
+        "scripts": ("plain", "urgency"),
+    },
 }
 
 
@@ -30,6 +34,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--plan", choices=PLANS, default="midterm24")
     parser.add_argument("--seed", type=int, default=117)
+    parser.add_argument("--codex-only", action="store_true", help="include only Codex rows")
     parser.add_argument("--output", type=Path, default=Path("runs/session_trial_matrix.csv"))
     return parser.parse_args()
 
@@ -38,7 +43,7 @@ def main() -> None:
     args = parse_args()
     plan = PLANS[args.plan]
     combinations = itertools.product(
-        ("codex", "claude"),
+        ("codex",) if args.codex_only else ("codex", "claude"),
         plan["conditions"],
         plan["scripts"],
         range(1, 4),
