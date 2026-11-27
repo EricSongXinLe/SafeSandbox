@@ -1,10 +1,10 @@
 # SafeSandbox
 
 ECE 117 study of how Linux access controls and trusted policy affect coding
-agents. The proposed Codex study measures OS access, native tool readiness,
+agents. The Codex study measures OS access, native tool readiness,
 and fictional authorization decisions separately on fresh VMs.
 
-- [GCP fresh-start manual](docs/gcp_vm_experiment.md) — generate the fixed 48-trial matrix and check launch readiness.
+- [GCP fresh-start manual](docs/gcp_vm_experiment.md) — package, calibrate C1–C4, and collect the fixed 48-trial grid.
 - [Benchmark implementation plan](docs/session_benchmark.md) — grid, calibration checks, and scoring.
 - [GCP smoke-test record](docs/gcp_smoke_test_recap.md) — historical Ubuntu verification.
 
@@ -23,8 +23,8 @@ python3 scripts/generate_session_matrix.py --plan codex-grid48 --seed 117 \
   --output runs/codex-grid48.csv
 ```
 
-The matrix generator runs locally. Live GCP collection for this grid
-requires runner support.
+The matrix generator runs locally. The GCP launcher requires verified
+calibration exports for C1–C4 before collecting this grid.
 
 ## Earlier single-turn study
 

@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
+import fcntl
 import hashlib
 import json
 import os
@@ -14,7 +16,9 @@ import tarfile
 import uuid
 
 from run_gcp_canary_suite import verify_export
+from grid_protocol import GRID_CALIBRATIONS, GRID_CONDITIONS, GRID_PLAN, GRID_SCRIPTS, grid_trial
 from provider_auth import prompt_provider_keys
+from run_session_matrix import read_matrix
 
 SCRIPTS = Path(__file__).resolve().parent
 CALIBRATION_IDS = ("codex_C3_pressure_r1", "claude_C3_pressure_r1")
@@ -29,7 +33,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bundle", required=True, type=Path)
     parser.add_argument("--sha256", required=True, help="trusted checksum for the uploaded bundle")
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--plan", choices=("focused24", "factorial48", "wording24"), default="focused24")
+    parser.add_argument("--plan", choices=("focused24", "factorial48", "wording24", GRID_PLAN), default="focused24")
     parser.add_argument("--codex-only", action="store_true",
                         help="use a separate matrix and receipt for Codex-only collection")
     parser.add_argument("--builder", help="existing prepared Ubuntu builder with the selected CLIs installed")
@@ -43,6 +47,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--calibration-reviewed", action="store_true",
                         help="confirm the exported calibration traces and selected controls were reviewed")
     args = parser.parse_args()
+    if args.plan == GRID_PLAN:
+        if args.agent or args.use_vm_auth:
+            parser.error("the Codex grid calibrates all four conditions and requires a runtime OpenAI key")
+        args.codex_only = True
     if not args.codex_only and not args.claude_model:
         parser.error("--claude-model is required unless --codex-only is selected")
     if args.codex_only:
@@ -59,7 +67,7 @@ def verify_bundle(path: Path, checksum: str) -> None:
         # The Cloud Shell entry point can be updated independently of the VM image.
         for script in ("build_gcp_canary_image.sh", "provider_auth.py",
                        "run_gcp_canary_suite.py", "generate_session_matrix.py",
-                       "run_session_matrix.py", "run_session_trial.py"):
+                       "run_session_matrix.py", "run_session_trial.py", "grid_protocol.py"):
             content = archive.extractfile(f"scripts/{script}")
             if content is None or content.read() != (SCRIPTS / script).read_bytes():
                 raise ValueError(f"run this workflow from the matching bundle: {script}")
@@ -84,7 +92,7 @@ def image_identity(args: argparse.Namespace) -> str:
 def check_calibration(path: Path, name: str) -> None:
     verify_export(path, name)
     with tarfile.open(path, "r:gz") as archive:
-        for turn in range(4):
+        for turn in range(2 if grid_trial(name) else 4):
             status_file = f"{name}/turn_{turn:02}_status.json"
             with archive.extractfile(status_file) as source:
                 if json.load(source).get("completed_with_answer") is not True:
@@ -127,7 +135,9 @@ def main() -> None:
     calibration_ids = CALIBRATION_IDS
     if args.plan == "wording24":
         calibration_ids = tuple(name.replace("_pressure_", "_plain_") for name in calibration_ids)
-    if args.codex_only:
+    if args.plan == GRID_PLAN:
+        calibration_ids = GRID_CALIBRATIONS
+    elif args.codex_only:
         calibration_ids = calibration_ids[:1]
     selected = tuple(name for name in calibration_ids if not args.agent or name.startswith(args.agent + "_"))
     scope = "codex" if args.codex_only else "both"
@@ -135,12 +145,36 @@ def main() -> None:
         setting = f"build from {args.builder}" if args.builder else f"reuse {args.image}"
         print(f"Dry run: {args.phase} in {args.project}/{args.zone}, {setting}")
         print(f"Plan: {args.plan}, agents: {scope}, evidence directory: {args.output}")
+        if args.plan == GRID_PLAN:
+            print("48 measured trials. Six per group:")
+            for condition in GRID_CONDITIONS:
+                print(f"  {condition}: role-neutral=6, role-urgent=6")
         if args.phase == "calibrate":
             print(f"Calibration rows: {', '.join(selected)}")
         return
 
     verify_bundle(args.bundle, args.sha256)
     args.output.mkdir(parents=True, exist_ok=True)
+    with (args.output / ".workflow.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise ValueError("another workflow is running in this evidence directory") from error
+        execute(args, calibration_ids, selected, scope)
+
+
+def check_grid_matrix(matrix: Path) -> None:
+    counts = Counter((row["agent"], row["condition"], row["script"], row["replicate"]) for row in read_matrix(matrix))
+    expected = {
+        ("codex", condition, wording, str(replicate)): 1
+        for condition in GRID_CONDITIONS for wording in GRID_SCRIPTS for replicate in range(1, 7)
+    }
+    if counts != expected:
+        raise ValueError("grid matrix must contain all 48 prescribed Codex trials exactly once")
+
+
+def execute(args: argparse.Namespace, calibration_ids: tuple, selected: tuple, scope: str) -> None:
+    is_grid = args.plan == GRID_PLAN
     receipt = args.output / "calibration.json"
     measured = args.output / "measured"
     if args.phase == "calibrate" and receipt.exists():
@@ -148,7 +182,7 @@ def main() -> None:
     if args.phase == "collect":
         if not args.calibration_reviewed or not receipt.is_file():
             raise ValueError("collect requires a successful calibration and --calibration-reviewed")
-        if measured.exists():
+        if measured.exists() and not is_grid:
             raise ValueError("measured output already exists; use the trial launcher for outstanding rows")
 
     if args.builder:
@@ -187,6 +221,9 @@ def main() -> None:
                 "--plan", args.plan, "--seed", "117", "--output", str(matrix),
                 *(("--codex-only",) if args.codex_only else ()))
             calibration = calibration_root / uuid.uuid4().hex
+        if is_grid:
+            check_grid_matrix(matrix)
+            print(f"Calibration run directory: {calibration}", flush=True)
         matrix_sha256 = hashlib.sha256(matrix.read_bytes()).hexdigest()
         verified = {}
         if args.resume_calibration:
@@ -196,7 +233,7 @@ def main() -> None:
                     verified[name] = archive
                     print(f"Reusing verified {name}: {archive}")
         pending = [name for name in selected if name not in verified]
-        agents = tuple(name.partition("_")[0] for name in pending)
+        agents = tuple(dict.fromkeys(name.partition("_")[0] for name in pending))
         keys = prompt_provider_keys(agents) if agents and not args.use_vm_auth else {}
         for name in pending:
             agent = name.partition("_")[0]
@@ -225,9 +262,23 @@ def main() -> None:
             raise ValueError("image or experiment configuration differs from calibration")
         if record["matrix_sha256"] != hashlib.sha256(matrix.read_bytes()).hexdigest():
             raise ValueError("matrix changed after calibration")
-        agents = tuple(name.partition("_")[0] for name in calibration_ids)
+        if is_grid:
+            check_grid_matrix(matrix)
+            calibration = Path(record["calibration_dir"]).resolve()
+            if (
+                calibration.parent != (args.output / "calibration").resolve()
+                or set(record["exports"]) != set(calibration_ids)
+            ):
+                raise ValueError("grid collection requires verified calibration for C1 through C4")
+            for name in calibration_ids:
+                archive = verified_attempt(calibration, name, configuration, record["matrix_sha256"])
+                if archive is None or str(archive.resolve()) != record["exports"][name]:
+                    raise ValueError(f"grid calibration is missing or changed: {name}")
+        agents = tuple(dict.fromkeys(name.partition("_")[0] for name in calibration_ids))
         keys = {} if args.use_vm_auth else prompt_provider_keys(agents)
-        measured.mkdir()
+        measured.mkdir(exist_ok=is_grid)
+        if is_grid:
+            launcher.append("--skip-completed")
         run(*launcher, "--output", str(measured), input=json.dumps(keys) if keys else None, text=True)
 
 

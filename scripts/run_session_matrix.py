@@ -19,6 +19,10 @@ import stat
 import subprocess
 import sys
 
+if __package__:
+    from .grid_protocol import GRID_PLAN, GRID_SCRIPTS, grid_trial
+else:
+    from grid_protocol import GRID_PLAN, GRID_SCRIPTS, grid_trial
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SESSION_RUNNER = PROJECT_ROOT / "scripts" / "run_session_trial.py"
@@ -27,7 +31,7 @@ LAB_MARKER = Path("/etc/ece117-lab-only")
 EXPECTED_MARKER = "ECE117-INERT-CANARY-V2"
 ALLOWED_CONDITIONS = {"C1", "C2", "C3", "C4"}
 PROTOCOL = "inert-canary-v2"
-ALLOWED_SCRIPTS = {"neutral", "pressure", "plain", "urgency"}
+ALLOWED_SCRIPTS = {"neutral", "pressure", "plain", "urgency", *GRID_SCRIPTS}
 ALLOWED_AGENTS = {"codex", "claude"}
 ARTIFACT_NAMES = {"manifest.json"} | {
     f"turn_{index:02}_{suffix}"
@@ -84,6 +88,8 @@ def read_matrix(path: Path) -> list[dict[str, str]]:
             raise RuntimeError(f"line {line_number}: unsupported condition {condition!r}")
         if script not in ALLOWED_SCRIPTS:
             raise RuntimeError(f"line {line_number}: unsupported script {script!r}")
+        if script in GRID_SCRIPTS and agent != "codex":
+            raise RuntimeError(f"line {line_number}: the Codex grid requires Codex")
         if replicate < 1:
             raise RuntimeError(f"line {line_number}: replicate must be at least 1")
         key = (agent, condition, script, replicate)
@@ -96,6 +102,14 @@ def read_matrix(path: Path) -> list[dict[str, str]]:
 
 def trial_id(row: dict[str, str]) -> str:
     return f"{row['agent']}_{row['condition']}_{row['script']}_r{row['replicate']}"
+
+
+def required_artifacts(name: str) -> set[str]:
+    return {
+        filename for filename in ARTIFACT_NAMES
+        if not filename.endswith("_ERROR.txt")
+        and (not grid_trial(name) or not filename.startswith(("turn_02_", "turn_03_")))
+    }
 
 
 def is_completed(destination: Path) -> bool:
@@ -287,6 +301,12 @@ def main() -> None:
             check=False,
         )
         if reset.returncode != 0:
+            if grid_trial(name):
+                (destination / "controller_status.json").write_text(json.dumps({
+                    "protocol": PROTOCOL, "complete": False,
+                    "failure_stage": "fixture", "artifact_sha256": {},
+                    "runner_stderr": reset.stderr,
+                }, indent=2) + "\n", encoding="utf-8")
             raise RuntimeError(f"fixture reset failed for {name}: {reset.stderr.strip()}")
         reset_attestation = json.loads(
             Path("/var/lib/ece117-admin/last_reset.json").read_text(encoding="utf-8")
@@ -328,9 +348,7 @@ def main() -> None:
         try:
             copy_trial_artifacts(staged, destination, alice_uid, artifact_hashes)
             manifest = json.loads((destination / "manifest.json").read_text(encoding="utf-8"))
-            required_artifacts = ARTIFACT_NAMES - {
-                f"turn_{index:02}_ERROR.txt" for index in range(4)
-            }
+            is_grid = grid_trial(name)
             complete = (
                 result.returncode == 0
                 and isinstance(manifest, dict)
@@ -340,9 +358,15 @@ def main() -> None:
                 and manifest.get("script") == row["script"]
                 and manifest.get("replicate") == int(row["replicate"])
                 and manifest.get("model_arg") == models[row["agent"]]
-                and manifest.get("turns_completed") == 4
+                and manifest.get("turns_completed") == (2 if is_grid else 4)
                 and (row["script"] not in ("plain", "urgency") or manifest.get("shared_control_verified") is True)
-                and artifact_hashes.keys() == required_artifacts
+                and (not is_grid or (
+                    manifest.get("plan") == GRID_PLAN
+                    and manifest.get("shared_control_verified") is True
+                    and manifest.get("judgment_response_id")
+                    and manifest["judgment_response_id"] != manifest.get("session_id")
+                ))
+                and artifact_hashes.keys() == required_artifacts(name)
             )
         except (OSError, ValueError, RuntimeError) as error:
             archive_error = str(error)

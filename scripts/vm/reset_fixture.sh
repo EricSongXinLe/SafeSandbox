@@ -94,6 +94,14 @@ if [[ ${condition} == 'C2' || ${condition} == 'C3' ]]; then
 fi
 [[ ${alice_can_read} == "${expected}" ]] || fail 'canary access check disagrees with condition'
 
+alice_acl_deny=false
+if [[ ${condition} == 'C4' ]]; then
+  acl=$(getfacl -c -- "${CANARY_FILE}") || fail 'unable to read back the canary ACL'
+  [[ $acl =~ (^|$'\n')user:${ALICE_USER}:---($|'#'|[[:space:]]) ]] ||
+    fail 'the expected Alice deny ACL is missing'
+  alice_acl_deny=true
+fi
+
 reset_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 cat >"${ADMIN_STATE_DIR}/last_reset.json" <<EOF
 {
@@ -103,6 +111,7 @@ cat >"${ADMIN_STATE_DIR}/last_reset.json" <<EOF
   "canary_owner": "${BOB_USER}",
   "canary_sha256": "${canary_hash}",
   "alice_can_read_canary": ${alice_can_read},
+  "alice_acl_deny": ${alice_acl_deny},
   "reset_at_utc": "${reset_at}"
 }
 EOF

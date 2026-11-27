@@ -1,105 +1,116 @@
 # ECE 117 GCP fresh-start manual
 
-This campaign has **48 measured Codex trials**. Each of C1–C4 has six
-neutral and six urgent trials. The [implementation plan](session_benchmark.md#proposed-codex-study)
-defines the conditions and the evidence to collect.
+This campaign runs **48 measured Codex trials**. Each of C1–C4 has six
+neutral and six urgent rows. Four separate calibration trials must pass
+before collection. See the [implementation plan](session_benchmark.md#proposed-codex-study)
+for the checks and the reporting rubric.
 
-**Status:** Steps 1–4 work today and end with a verified 48-row preview in
-Cloud Shell. Live calibration and collection require runner support.
+Use the lab subnet with IAP SSH and outbound access for Ubuntu packages,
+the Codex installer, and the OpenAI API. The live steps create billable
+resources.
 
-## 1. Mac terminal — generate and package the grid
+## 1. Mac terminal — package and upload
 
-Paste this block on your Mac. It prints the archive path and its SHA-256
-checksum. Copy the 64-character checksum for Step 4.
+Run this from your Mac. Copy the printed SHA-256 checksum and upload the
+archive to your Cloud Shell home directory via **Cloud Shell → More → Upload**.
+Use the fresh archive from this step.
 
 ```bash
 (
   set -e
   cd "$HOME/Desktop/SafeSandbox"
-  python3 scripts/generate_session_matrix.py --plan codex-grid48 --seed 117 \
-    --output runs/codex-grid48.csv
-
   stamp="$(date -u +%Y%m%d-%H%M%S)"
-  preview_dir="$(mktemp -d "${TMPDIR:-/tmp}/ece117-grid48.XXXXXX")"
-  bundle="$preview_dir/ece117-grid48-preview-$stamp.tar.gz"
+  dest="$(mktemp -d "${TMPDIR:-/tmp}/ece117-grid48.XXXXXX")"
+  bundle="$dest/ece117-grid48-$stamp.tar.gz"
   LC_ALL=C COPYFILE_DISABLE=1 tar -czf "$bundle" \
-    runs/codex-grid48.csv scripts/generate_session_matrix.py
+    scripts/build_gcp_canary_image.sh scripts/run_gcp_experiment.py \
+    scripts/run_gcp_canary_suite.py scripts/generate_session_matrix.py \
+    scripts/run_session_matrix.py scripts/run_session_trial.py \
+    scripts/provider_auth.py scripts/grid_protocol.py scripts/vm/reset_fixture.sh \
+    prompts/session_scenarios.json prompts/session_authorization_policy.txt \
+    tests/test_canary_suite.py tests/test_trial_archive.py
   LC_ALL=C shasum -a 256 "$bundle"
 )
 ```
 
-## 2. Google Cloud Console — open Cloud Shell and upload
+## 2. Cloud Shell — verify and preview
 
-Open project `future-name-514800-v0` and click **Activate Cloud Shell** (`>_`).
-In the Cloud Shell toolbar, choose **More → Upload** and select the
-`ece117-grid48-preview-…tar.gz` file from Step 1. Upload it to your
-Cloud Shell home directory.
-
-## 3. Cloud Shell — verify the account and subnet
-
-Run this at a prompt that shows `@cloudshell`.
+Open Cloud Shell in project `future-name-514800-v0`. If there is no active
+account after you authorize Cloud Shell, run `gcloud auth login`.
 
 ```bash
-(
-  set -e
-  PROJECT='future-name-514800-v0'
-  ZONE='us-central1-a'
-  SUBNET='default'
-
-  account="$(gcloud auth list --filter=status:ACTIVE --format='value(account)')"
-  if [[ -z "$account" ]]; then
-    printf '%s\n' 'No active account. Authorize Cloud Shell, then rerun this block.' >&2
-    exit 1
-  fi
-  printf 'Active Google Cloud account: %s\n' "$account"
-
-  gcloud compute networks subnets describe "$SUBNET" \
-    --project="$PROJECT" --region="${ZONE%-*}" --format='value(name)'
-)
+gcloud auth list --filter=status:ACTIVE --format='value(account)'
 ```
 
-Expect your lab account and `default`. If Cloud Shell has no credentialed
-account after authorization, run `gcloud auth login` and repeat Step 3.
-
-## 4. Cloud Shell — verify, extract, and preview the grid
-
-Paste the complete block. Enter the uploaded **filename** and the SHA-256
-from Step 1 when prompted.
+Paste this block and enter the uploaded **filename** and the checksum from
+Step 1. The timestamp in the archive name sets the builder, image, and
+evidence directory. To resume in a new terminal, use the same archive again.
 
 ```bash
-(
-  set -e
-  read -r -p 'Uploaded filename: ' bundle_name
-  read -r -p 'SHA-256 from your Mac: ' bundle_sha
-  bundle="$HOME/$bundle_name"
+unset -f grid48 2>/dev/null || true
+read -r -p 'Uploaded filename: ' bundle_name
+read -r -p 'SHA-256 from your Mac: ' BUNDLE_SHA
+export PROJECT='future-name-514800-v0' ZONE='us-central1-a' SUBNET='default'
+export BUNDLE="$HOME/$bundle_name"
 
-  if [[ ! -f "$bundle" || ! "$bundle_sha" =~ ^[a-f0-9]{64}$ ]]; then
-    printf '%s\n' 'Check the uploaded filename and paste only the 64-character checksum.' >&2
-    exit 1
+if [[ "$bundle_name" =~ ^ece117-grid48-([0-9]{8}-[0-9]{6})\.tar\.gz$ ]] &&
+   [[ "$BUNDLE_SHA" =~ ^[a-f0-9]{64}$ ]] &&
+   printf '%s  %s\n' "$BUNDLE_SHA" "$BUNDLE" | sha256sum -c -; then
+  stamp="${bundle_name#ece117-grid48-}"
+  stamp="${stamp%.tar.gz}"
+  export BUNDLE_SHA BUILDER="ece117-grid48-builder-$stamp" IMAGE="ece117-grid48-$stamp"
+  OUT="$HOME/ece117-evidence/$IMAGE"
+  operator_dir="$(mktemp -d "$HOME/ece117-grid48.XXXXXX")"
+  if tar -xzf "$BUNDLE" -C "$operator_dir" &&
+     test -f "$operator_dir/scripts/grid_protocol.py"; then
+    grid48() {
+      python3 "$operator_dir/scripts/run_gcp_experiment.py" \
+        --plan codex-grid48 --project "$PROJECT" --zone "$ZONE" --subnet "$SUBNET" \
+        --image "$IMAGE" --codex-model gpt-6-luna \
+        --bundle "$BUNDLE" --sha256 "$BUNDLE_SHA" --output "$OUT" "$@"
+    }
+    grid48 calibrate --builder "$BUILDER"
   fi
-  printf '%s  %s\n' "$bundle_sha" "$bundle" | sha256sum -c -
-
-  stage="$(mktemp -d "$HOME/ece117-grid48.XXXXXX")"
-  tar -xzf "$bundle" -C "$stage"
-  python3 "$stage/scripts/generate_session_matrix.py" \
-    --plan codex-grid48 --seed 117 --output "$stage/regenerated.csv"
-  cmp "$stage/runs/codex-grid48.csv" "$stage/regenerated.csv"
-
-  printf '\nRows by condition and wording\n'
-  awk -F, 'NR > 1 {print $1, $2, $3}' "$stage/runs/codex-grid48.csv" | sort | uniq -c
-  printf '\nVerified matrix: %s\n' "$stage/runs/codex-grid48.csv"
-)
+else
+  printf '%s\n' 'Check the uploaded filename and checksum before proceeding.' >&2
+fi
 ```
 
-Expect `OK` from the checksum and **eight rows of counts**, each showing
-six trials. The package is a preview bundle. These commands create no
-trial VMs and ask for no model API key.
+Expect **48 measured trials**, six rows for each wording in each condition,
+and four calibration rows. The preview creates no VMs.
 
-## Live-run checkpoint
+## 3. Cloud Shell — prepare the builder
 
-The existing launcher has no launch command for `codex-grid48`. Once the
-new runner is available, calibrate all four conditions on the intended
-image before collecting the 48 measured rows.
+Run this on the first attempt. If the builder already exists, omit
+`--create-builder` and run `prepare` again.
+
+```bash
+bash "${operator_dir:?Complete Step 2 first}/scripts/build_gcp_canary_image.sh" \
+  prepare --create-builder
+```
+
+Install the Codex CLI as Alice, or use the team's pinned release when
+available. Record the printed version. Keep the API key for Step 4.
+[Official Codex installer](https://learn.chatgpt.com/docs/codex/cli)
+
+```bash
+gcloud compute ssh "$BUILDER" --project="$PROJECT" --zone="$ZONE" \
+  --tunnel-through-iap \
+  --command="sudo -n -iu alice bash -lc 'set -o pipefail; if ! command -v codex >/dev/null; then curl -fsSL https://chatgpt.com/codex/install.sh | sh; fi'"
+gcloud compute ssh "$BUILDER" --project="$PROJECT" --zone="$ZONE" \
+  --tunnel-through-iap --command='sudo -n -iu alice -- codex --version'
+```
+
+## 4. Cloud Shell — calibrate C1–C4
+
+```bash
+grid48 calibrate --builder "$BUILDER" --execute
+```
+
+The launcher builds the image and asks for the OpenAI trial key with
+hidden input. The key and `gpt-6-luna` must work for both Codex CLI and the
+tool-free Responses API call. Expect four verified exports under
+`$OUT/calibration` and a `Calibration complete` message.
 
 | Condition | Alice's OS read of the inert fixture | Codex read of the authorized shared file |
 | --- | --- | --- |
@@ -108,7 +119,66 @@ image before collecting the 48 measured rows.
 | C3 | Allowed | Verified |
 | C4 | Denied | Verified |
 
-The shared-file check must come from the actual Codex tool result.
-The fictional role decision runs in a separate session with tool
-execution unavailable. Keep fixture checks, shared-file reads, and
-fictional decisions separate when reporting.
+Review `controller_status.json`, the native control trace
+`turn_00_events.jsonl`, and the recorded judgment response in
+`turn_01_events.jsonl` inside each calibration archive. The control uses a
+single read-only MCP tool for the deliberately shared file. The fictional
+decision uses a fresh text-only Responses API request with tools unavailable.
+
+If calibration stops, inspect the attempt's `operator.log` and any
+exported evidence. After correcting the failure, resume using the printed
+calibration directory and the same image:
+
+```bash
+read -r -p 'Calibration run directory: ' calibration_dir
+grid48 calibrate --resume-calibration "$calibration_dir" --execute
+```
+
+If the image was created before a calibration directory was allocated, use
+`grid48 calibrate --execute` to start calibration on that image.
+
+## 5. Cloud Shell — collect the 48 measured rows
+
+After reviewing all four exports, run:
+
+```bash
+grid48 collect --calibration-reviewed --execute
+```
+
+The launcher checks the four calibration exports against the recorded image
+and matrix. It creates a fresh VM per row. If collection stops, address the
+failure and rerun the same command. Verified rows are reused. Check failed
+attempt metadata for VMs that may still be running.
+
+## 6. Cloud Shell and Mac — download and report
+
+In Cloud Shell, package the completed evidence for download. Save it to
+approved private storage.
+
+```bash
+(
+  set -e
+  umask 077
+  tar -czf "$HOME/$IMAGE-evidence.tar.gz" -C "$(dirname "$OUT")" "$(basename "$OUT")"
+  printf '%s\n' "$HOME/$IMAGE-evidence.tar.gz"
+)
+```
+
+Download that file via **Cloud Shell → More → Download**. On your Mac, paste
+the path to the downloaded archive when prompted.
+
+```bash
+(
+  set -e
+  cd "$HOME/Desktop/SafeSandbox"
+  printf 'Downloaded evidence archive path: '
+  IFS= read -r evidence_bundle
+  campaign="$(basename "$evidence_bundle" -evidence.tar.gz)"
+  mkdir -p ece117-evidence
+  tar -xzf "$evidence_bundle" -C ece117-evidence
+  python3 scripts/summarize_session_results.py "ece117-evidence/$campaign"
+)
+```
+
+For a chart, add `--chart results.png` to the report command using a Python
+environment with Matplotlib installed.

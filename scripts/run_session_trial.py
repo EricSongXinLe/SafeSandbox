@@ -22,8 +22,10 @@ import sys
 import uuid
 
 if __package__:
+    from . import grid_protocol as grid
     from .provider_auth import KEY_ENV, KEY_LIMIT, check_model_access, validate_key
 else:
+    import grid_protocol as grid
     from provider_auth import KEY_ENV, KEY_LIMIT, check_model_access, validate_key
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -230,6 +232,13 @@ def build_command(
         if policy:
             # JSON strings are valid TOML basic strings for Codex -c overrides.
             command.extend(["-c", "developer_instructions=" + json.dumps(policy)])
+        if args.script in grid.GRID_SCRIPTS:
+            command.extend([
+                "--ephemeral", "--ignore-user-config", "--disable", "shell_tool", "--disable", "multi_agent",
+                "-c", 'web_search="disabled"',
+                "-c", f'mcp_servers={{{grid.SERVER}={{command="python3", args=['
+                + json.dumps(str(Path(grid.__file__).resolve())) + "]}}",
+            ])
         if session_id:
             command.extend(["resume", session_id, prompt])
         else:
@@ -264,7 +273,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--agent", choices=("codex", "claude"), required=True)
     parser.add_argument("--condition", choices=tuple(CONDITIONS), required=True)
-    parser.add_argument("--script", choices=("neutral", "pressure", *WORDING_SCRIPTS), required=True)
+    parser.add_argument("--script", choices=("neutral", "pressure", *WORDING_SCRIPTS, *grid.GRID_SCRIPTS), required=True)
     parser.add_argument("--replicate", type=int, required=True)
     parser.add_argument("--model", required=True, help="pin a concrete model identifier")
     parser.add_argument("--workspace", type=Path, required=True)
@@ -300,10 +309,19 @@ def main() -> None:
     if args.timeout < 1:
         raise SystemExit("--timeout must be positive")
 
-    scenario = json.loads(SCENARIOS.read_text(encoding="utf-8"))
-    if scenario.get("schema_version") != 2:
-        raise RuntimeError("expected the inert-canary scenario schema")
-    prompts = select_prompts(scenario, args.script)
+    is_grid = args.script in grid.GRID_SCRIPTS
+    if is_grid:
+        if args.agent != "codex" or (args.execute and not args.provider_key_stdin):
+            raise ValueError("the Codex grid requires Codex and a runtime OpenAI key")
+        role_prompt = grid.ROLE_PROMPT
+        if args.script == "role-urgent":
+            role_prompt = "This is urgent. " + role_prompt
+        prompts = [grid.CONTROL_PROMPT, role_prompt]
+    else:
+        scenario = json.loads(SCENARIOS.read_text(encoding="utf-8"))
+        if scenario.get("schema_version") != 2:
+            raise RuntimeError("expected the inert-canary scenario schema")
+        prompts = select_prompts(scenario, args.script)
     require_shared_control = args.script in WORDING_SCRIPTS
     if not all(isinstance(prompt, str) and prompt for prompt in prompts):
         raise RuntimeError("scenario file contains a missing or invalid prompt")
@@ -321,9 +339,14 @@ def main() -> None:
         "model_arg": args.model,
         "prompts_sha256": [digest(prompt) for prompt in prompts],
         "policy_sha256": digest(policy) if policy else None,
-        "control_gate": "verified_shared_file_read" if require_shared_control else None,
+        "control_gate": "verified_shared_file_read" if require_shared_control or is_grid else None,
         "note": "one trial is one fresh session containing all four scripted turns",
     }
+    if is_grid:
+        manifest.update(
+            plan=grid.GRID_PLAN, control_transport="codex_mcp", judgment_transport="responses_no_tools",
+            note="one native Codex control session and one independent tool-free model response",
+        )
     if not args.execute:
         print(json.dumps({"dry_run": True, "manifest": manifest, "turns": prompts}, indent=2))
         return
@@ -377,21 +400,29 @@ def main() -> None:
 
     session_id = None
     for index, prompt in enumerate(prompts):
-        command = build_command(args, session_id, prompt, policy)
         (output_dir / f"turn_{index:02}_prompt.txt").write_text(
             prompt + "\n", encoding="utf-8"
         )
         try:
-            process = subprocess.run(
-                command,
-                cwd=args.workspace,
-                env=provider_env,
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
-                timeout=args.timeout,
-                check=False,
-            )
+            if is_grid and index == 1:
+                response_id, answer = grid.judgment(args.model, provider_key, policy, prompt, args.timeout)
+                events = [
+                    {"type": "thread.started", "thread_id": response_id},
+                    {"type": "item.completed", "item": {"type": "agent_message", "text": answer}},
+                    {"type": "turn.completed"},
+                ]
+                process = subprocess.CompletedProcess([], 0, "\n".join(map(json.dumps, events)), "")
+            else:
+                process = subprocess.run(
+                    build_command(args, session_id, prompt, policy),
+                    cwd=args.workspace, env=provider_env, stdin=subprocess.DEVNULL,
+                    capture_output=True, text=True, timeout=args.timeout, check=False,
+                )
+        except RuntimeError as error:
+            (output_dir / f"turn_{index:02}_ERROR.txt").write_text(clean(str(error)), encoding="utf-8")
+            manifest["termination_reason"] = "judgment_failed"
+            manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+            break
         except subprocess.TimeoutExpired as error:
             (output_dir / f"turn_{index:02}_events.jsonl").write_text(
                 clean(error.stdout), encoding="utf-8"
@@ -402,6 +433,9 @@ def main() -> None:
             (output_dir / f"turn_{index:02}_ERROR.txt").write_text(
                 "TIMEOUT; trial incomplete\n", encoding="utf-8"
             )
+            if is_grid:
+                manifest["termination_reason"] = "shared_control_unverified"
+                manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
             break
 
         safe_stdout = clean(process.stdout)
@@ -426,6 +460,9 @@ def main() -> None:
                 "nonzero exit, missing session metadata, or no successful answer; trial incomplete\n",
                 encoding="utf-8",
             )
+            if is_grid:
+                manifest["termination_reason"] = "shared_control_unverified" if index == 0 else "judgment_failed"
+                manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
             break
         if index == 0 and args.agent == "claude" and extracted_id != args.session_uuid:
             (output_dir / f"turn_{index:02}_ERROR.txt").write_text(
@@ -433,18 +470,21 @@ def main() -> None:
                 encoding="utf-8",
             )
             break
-        if session_id and extracted_id != session_id:
+        if not is_grid and session_id and extracted_id != session_id:
             (output_dir / f"turn_{index:02}_ERROR.txt").write_text(
                 "session ID changed unexpectedly; trial contaminated/invalid\n",
                 encoding="utf-8",
             )
             break
 
-        session_id = extracted_id
-        manifest["session_id"] = session_id
+        if is_grid and index == 1:
+            manifest["judgment_response_id"] = extracted_id
+        else:
+            session_id = extracted_id
+            manifest["session_id"] = extracted_id
         manifest["turns_completed"] = index + 1
-        if index == 0 and require_shared_control:
-            control_ok = shared_control_verified(args.agent, events, expected_shared)
+        if index == 0 and (require_shared_control or is_grid):
+            control_ok = grid.control_verified(events) if is_grid else shared_control_verified(args.agent, events, expected_shared)
             manifest["shared_control_verified"] = control_ok
             if not control_ok:
                 manifest["termination_reason"] = "shared_control_unverified"
@@ -460,9 +500,12 @@ def main() -> None:
 
     print(
         f"wrote private trial evidence to {output_dir}; "
-        f"completed {manifest['turns_completed']}/4 turns"
+        f"completed {manifest['turns_completed']}/{len(prompts)} turns"
     )
-    print("score canary access, disclosure, and the fictional role decision offline")
+    if is_grid:
+        print("report fixture access, the shared control, and the fictional decision offline")
+    else:
+        print("score canary access, disclosure, and the fictional role decision offline")
     if manifest["turns_completed"] != len(prompts):
         raise SystemExit(1)
 

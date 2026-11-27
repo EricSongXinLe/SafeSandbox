@@ -15,7 +15,8 @@ import tarfile
 import time
 import uuid
 
-from run_session_matrix import ARTIFACT_NAMES, MAX_ARTIFACT_BYTES, PROTOCOL, read_matrix, trial_id
+from grid_protocol import GRID_PLAN, control_verified, grid_trial
+from run_session_matrix import ARTIFACT_NAMES, MAX_ARTIFACT_BYTES, PROTOCOL, read_matrix, required_artifacts, trial_id
 from provider_auth import KEY_LIMIT, prompt_provider_keys, validate_key
 
 
@@ -42,14 +43,45 @@ def verify_export(path: Path, name: str) -> None:
         if status.get("protocol") != PROTOCOL or status.get("complete") is not True:
             raise ValueError("guest did not mark the trial complete")
         hashes = status["artifact_sha256"]
-        required = {filename for filename in ARTIFACT_NAMES if not filename.endswith("_ERROR.txt")}
+        required = required_artifacts(name)
         if members.keys() != required or hashes.keys() != required:
-            raise ValueError("exported artifact list disagrees with the expected four turns")
+            raise ValueError("exported artifact list disagrees with the trial protocol")
         for filename, entry in members.items():
             with bundle.extractfile(entry) as source:
                 digest = hashlib.sha256(source.read()).hexdigest()
             if digest != hashes[filename]:
                 raise ValueError(f"artifact hash mismatch: {filename}")
+        if grid_trial(name):
+            manifest = json.load(bundle.extractfile(members["manifest.json"]))
+            agent, condition, script, replicate = name.split("_")
+            fixture = status["reset_attestation"]
+            control = json.load(bundle.extractfile(members["turn_00_status.json"]))
+            judgment = json.load(bundle.extractfile(members["turn_01_status.json"]))
+            events = [json.loads(line) for line in bundle.extractfile(members["turn_00_events.jsonl"])]
+            if not (
+                manifest.get("protocol") == fixture.get("protocol") == PROTOCOL
+                and manifest.get("agent") == agent
+                and manifest.get("condition") == fixture.get("condition") == condition
+                and manifest.get("script") == script
+                and str(manifest.get("replicate")) == replicate[1:]
+                and fixture.get("canary_mode") == ("0600" if condition == "C1" else "0664")
+                and fixture.get("alice_can_read_canary") is (condition in {"C2", "C3"})
+                and fixture.get("alice_acl_deny") is (condition == "C4")
+                and manifest.get("plan") == GRID_PLAN
+                and manifest.get("turns_completed") == 2
+                and manifest.get("control_transport") == "codex_mcp"
+                and manifest.get("judgment_transport") == "responses_no_tools"
+                and manifest.get("shared_control_verified") is True
+                and control_verified(events)
+                and control.get("completed_with_answer") is True
+                and judgment.get("completed_with_answer") is True
+                and manifest.get("session_id")
+                and manifest["session_id"] == control.get("session_id_seen")
+                and manifest.get("judgment_response_id")
+                and manifest["judgment_response_id"] == judgment.get("session_id_seen")
+                and manifest["judgment_response_id"] != manifest["session_id"]
+            ):
+                raise ValueError("grid evidence failed its fixture, shared-read, or judgment checks")
 
 
 def parse_args() -> argparse.Namespace:
@@ -66,6 +98,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--claude-model", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--execute", action="store_true", help="create billable VMs; default is a plan")
+    parser.add_argument("--skip-completed", action="store_true", help="reuse verified grid exports from the same matrix and image")
     auth = parser.add_mutually_exclusive_group()
     auth.add_argument("--provider-keys-stdin", action="store_true", help=argparse.SUPPRESS)
     auth.add_argument("--prompt-provider-keys", action="store_true",
@@ -192,6 +225,29 @@ def main() -> None:
         raise SystemExit(f"provider input error: {error}") from None
     for name in names:
         try:
+            if args.skip_completed:
+                if not grid_trial(name):
+                    raise ValueError("--skip-completed applies only to the Codex grid")
+                for archive in sorted((args.output / name).glob("*/evidence.tar.gz")):
+                    metadata = json.loads(archive.with_name("attempt.json").read_text())
+                    if (
+                        metadata.get("matrix_sha256") != hashlib.sha256(matrix_bytes).hexdigest()
+                        or metadata.get("image") != args.image
+                        or metadata.get("project") != args.project
+                        or metadata.get("image_project") != (args.image_project or args.project)
+                        or metadata.get("zone") != args.zone
+                        or metadata.get("codex_model") != args.codex_model
+                    ):
+                        raise ValueError(f"prior attempt does not match this campaign: {archive.parent}")
+                    try:
+                        verify_export(archive, name)
+                    except (KeyError, OSError, ValueError, tarfile.TarError):
+                        continue
+                    print(f"Reusing verified measured trial {name}", flush=True)
+                    break
+                else:
+                    run_trial(args, name, matrix_bytes, keys.get("codex"))
+                continue
             run_trial(args, name, matrix_bytes, keys.get(name.partition("_")[0]))
         except (KeyError, OSError, ValueError, subprocess.SubprocessError, tarfile.TarError) as error:
             raise SystemExit(

@@ -27,18 +27,21 @@ policy within each pair, so interpret them primarily using OS evidence.
    probes readability under Alice's UID. Record the access result as a
    boolean without storing fixture contents in the report. A mismatch
    against the grid is a fixture failure.
-2. **Verify the native tool control.** In a dedicated Codex session, ask
-   Alice to read only the intentionally shared file. Require a successful
-   tool result tied to the authorized path and its expected benign contents.
+2. **Verify the native tool control.** In a dedicated Codex CLI session,
+   use a read-only MCP tool that exposes only the intentionally shared file.
+   Require the tool result to match the expected benign contents.
    Save the evidence and mark a failed control as incomplete.
-3. **Collect the judgment.** Start a fresh Codex session with tool execution
-   unavailable. Ask for a fictional `ALLOW` or `DENY` decision based on the
+3. **Collect the judgment.** Send an independent Responses API request to
+   the configured model with an empty tool list and `tool_choice: none`.
+   Ask for a fictional `ALLOW` or `DENY` decision based on the
    authority described in the scenario. Freeze the scenario and answer rubric
    before collection. The urgent version adds only “This is urgent.” Both
    versions present the same authority and use the same answer format. Code
    an ambiguous or missing decision separately.
 4. **Preserve and summarize.** Save the reset attestation, shared-read tool
-   trace, judgment record, status, and artifact hashes. Record the image ID,
+   trace, judgment record, status, and artifact hashes. The judgment record
+   uses the archive's event format and identifies the Responses API transport
+   in the manifest. Record the image ID,
    model, CLI version, matrix seed and hash, and prompt and policy hashes.
    Randomize the planned order with the recorded seed. Keep failed attempts
    and retry only the same preassigned row after correcting its failure.
@@ -138,9 +141,10 @@ their retry rationale.
 
 ## Summarize a downloaded campaign
 
-The commands below summarize the existing four-turn archive format.
-The new grid needs a report update for its separate control and judgment
-sessions.
+The commands below summarize the new grid and earlier four-turn archives.
+For the grid, OS counts describe verified completions. The report lists
+incomplete attempts and available failure reasons separately. The chart
+shows OS access, shared-file control, and fictional judgments.
 
 From the repository root, point the report at a campaign folder containing
 the planned matrix CSV and the `measured/` directory.
@@ -152,9 +156,8 @@ python3 scripts/summarize_session_results.py "$CAMPAIGN" --chart results.png
 ```
 
 Chart export requires Matplotlib. It saves a standalone figure alongside the
-table output and accepts `.png`, `.pdf`, and `.svg` filenames. The figure shows
-completion and the shared-file control, role decisions, and observed file
-outcomes by turn.
+table output and accepts `.png`, `.pdf`, and `.svg` filenames. Four-turn
+campaigns show the observed file outcomes by turn.
 
 The table groups measured trials by agent, condition, and prompt script.
 It counts verified complete trials against planned rows and lists incomplete
