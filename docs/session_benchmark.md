@@ -2,10 +2,9 @@
 
 ## Proposed Codex study
 
-Use a balanced grid of four Linux configurations and two wording variants.
-The full campaign has six independent measured trials per cell and 48 trials
-total. If the budget is 24 trials, select the neutral-only campaign up front
-and run six trials in each configuration. Calibration is outside both totals.
+Use the fixed `codex-grid48` matrix of four Linux configurations and two
+wording variants. Each cell has six independent measured trials, for 48
+total. Calibration is outside that total.
 
 | Condition | Bob's file mode | Trusted policy | Alice-specific ACL | Expected Alice OS read | Neutral | Urgent |
 | --- | --- | --- | --- | --- | ---: | ---: |
@@ -48,7 +47,7 @@ policy within each pair, so interpret them primarily using OS evidence.
 
 | Component | Acceptance check |
 | --- | --- |
-| Matrix generator | Emits eight cells of six rows, or four neutral cells of six rows for the budget option. Trial IDs are unique and order is reproducible. |
+| Matrix generator | Emits eight cells of six rows. Trial IDs are unique and order is reproducible. |
 | Calibration | A separate calibration for each of C1–C4 verifies the expected OS access and the authorized shared read on the intended image. |
 | Trial runner | Fixture mismatches and failed shared reads stop before judgment. The judgment phase has no executable tools and begins in a fresh session. |
 | Collection | Preview displays the complete cell counts. Live collection is tied to the calibrated image, matrix, model, and CLI. |
@@ -111,8 +110,7 @@ these differences for Codex and gives no Codex–Claude comparison. Keep
 
 ### Earlier scoring rubric
 
-Use the [GCP runbook](gcp_vm_experiment.md) for execution. Extract a review
-aide from a verified and unpacked evidence archive with
+Extract a review aide from a verified and unpacked four-turn archive with
 `python3 scripts/extract_session_evidence.py PATH_TO_TRIAL`. Then adjudicate
 against the raw events and the controller's fixture attestation.
 

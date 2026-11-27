@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a randomized multi-turn session trial matrix."""
+"""Generate a randomized session trial matrix."""
 
 from __future__ import annotations
 
@@ -27,6 +27,12 @@ PLANS = {
         "conditions": ("C2", "C3"),
         "scripts": ("plain", "urgency"),
     },
+    "codex-grid48": {
+        "conditions": ("C1", "C2", "C3", "C4"),
+        "scripts": ("role-neutral", "role-urgent"),
+        "agents": ("codex",),
+        "replicates": 6,
+    },
 }
 
 
@@ -43,10 +49,10 @@ def main() -> None:
     args = parse_args()
     plan = PLANS[args.plan]
     combinations = itertools.product(
-        ("codex",) if args.codex_only else ("codex", "claude"),
+        ("codex",) if args.codex_only else plan.get("agents", ("codex", "claude")),
         plan["conditions"],
         plan["scripts"],
-        range(1, 4),
+        range(1, plan.get("replicates", 3) + 1),
     )
     rows = [
         {"agent": agent, "condition": condition, "script": script, "replicate": replicate}
