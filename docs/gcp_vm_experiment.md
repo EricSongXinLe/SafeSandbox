@@ -11,9 +11,9 @@ resources.
 
 ## 1. Mac terminal — package and upload
 
-Run this from your Mac. Copy the printed SHA-256 checksum and upload the
-archive to your Cloud Shell home directory via **Cloud Shell → More → Upload**.
-Use the fresh archive from this step.
+Run this from your Mac. Upload the archive at the printed path to your Cloud
+Shell home directory via **Cloud Shell → More → Upload**. Save the two
+variable assignments printed below the path for Step 2.
 
 ```bash
 (
@@ -29,7 +29,9 @@ Use the fresh archive from this step.
     scripts/provider_auth.py scripts/grid_protocol.py scripts/vm/reset_fixture.sh \
     prompts/session_scenarios.json prompts/session_authorization_policy.txt \
     tests/test_canary_suite.py tests/test_trial_archive.py
-  LC_ALL=C shasum -a 256 "$bundle"
+  checksum="$(LC_ALL=C shasum -a 256 "$bundle")"
+  printf 'Archive to upload: %s\n\n' "$bundle"
+  printf 'bundle_name=%s\nBUNDLE_SHA=%s\n' "$(basename "$bundle")" "${checksum%% *}"
 )
 ```
 
@@ -42,20 +44,24 @@ account after you authorize Cloud Shell, run `gcloud auth login`.
 gcloud auth list --filter=status:ACTIVE --format='value(account)'
 ```
 
-Paste this block and enter the uploaded **filename** and the checksum from
-Step 1. The timestamp in the archive name sets the builder, image, and
-evidence directory. To resume in a new terminal, use the same archive again.
+First paste the two assignment lines from Step 1, starting with
+`bundle_name=` and `BUNDLE_SHA=`. Then paste the setup block below.
+The timestamp in the filename sets the builder, image, and evidence
+directory. To resume in a new terminal, use the same archive and assignments.
 
 ```bash
 unset -f grid48 2>/dev/null || true
-read -r -p 'Uploaded filename: ' bundle_name
-read -r -p 'SHA-256 from your Mac: ' BUNDLE_SHA
+unset operator_dir
 export PROJECT='future-name-514800-v0' ZONE='us-central1-a' SUBNET='default'
-export BUNDLE="$HOME/$bundle_name"
+export BUNDLE="$HOME/${bundle_name:-}"
 
-if [[ "$bundle_name" =~ ^ece117-grid48-([0-9]{8}-[0-9]{6})\.tar\.gz$ ]] &&
-   [[ "$BUNDLE_SHA" =~ ^[a-f0-9]{64}$ ]] &&
-   printf '%s  %s\n' "$BUNDLE_SHA" "$BUNDLE" | sha256sum -c -; then
+if [[ ! "${bundle_name:-}" =~ ^ece117-grid48-[0-9]{8}-[0-9]{6}\.tar\.gz$ ]]; then
+  printf '%s\n' 'Set bundle_name to the uploaded archive filename.' >&2
+elif [[ ! "${BUNDLE_SHA:-}" =~ ^[a-f0-9]{64}$ ]]; then
+  printf '%s\n' 'Set BUNDLE_SHA to the 64-character checksum printed on your Mac.' >&2
+elif [[ ! -f "$BUNDLE" ]]; then
+  printf 'Uploaded archive missing: %s\n' "$BUNDLE" >&2
+elif printf '%s  %s\n' "$BUNDLE_SHA" "$BUNDLE" | sha256sum -c -; then
   stamp="${bundle_name#ece117-grid48-}"
   stamp="${stamp%.tar.gz}"
   export BUNDLE_SHA BUILDER="ece117-grid48-builder-$stamp" IMAGE="ece117-grid48-$stamp"
@@ -70,9 +76,10 @@ if [[ "$bundle_name" =~ ^ece117-grid48-([0-9]{8}-[0-9]{6})\.tar\.gz$ ]] &&
         --bundle "$BUNDLE" --sha256 "$BUNDLE_SHA" --output "$OUT" "$@"
     }
     grid48 calibrate --builder "$BUILDER"
+  else
+    unset operator_dir
+    printf '%s\n' 'Could not extract the grid runner from the verified archive.' >&2
   fi
-else
-  printf '%s\n' 'Check the uploaded filename and checksum before proceeding.' >&2
 fi
 ```
 
