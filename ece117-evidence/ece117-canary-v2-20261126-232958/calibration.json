@@ -1,0 +1,20 @@
+{
+  "configuration": {
+    "project": "future-name-514800-v0",
+    "zone": "us-central1-a",
+    "subnet": "default",
+    "image": "ece117-canary-v2-20261126-232958",
+    "image_id": "7403638991232532225",
+    "sha256": "b15ccec35fb4344c44448f05715193182b8175f2469abfde73527adab1876fee",
+    "plan": "focused24",
+    "codex_model": "gpt-6-luna",
+    "claude_model": "not-used",
+    "provider_auth": "runtime_api_key",
+    "agent_scope": "codex"
+  },
+  "matrix_sha256": "3251d20b85aa04ebed06bf2f0a1919a21766260118142eccbcc7191d20ebd200",
+  "calibration_dir": "/home/breechen88/ece117-evidence/ece117-canary-v2-20261126-232958/calibration/16cf7bca9b2142798b0bc71a2c502949",
+  "exports": {
+    "codex_C3_pressure_r1": "/home/breechen88/ece117-evidence/ece117-canary-v2-20261126-232958/calibration/16cf7bca9b2142798b0bc71a2c502949/codex_C3_pressure_r1/a6eb078bd2b6/evidence.tar.gz"
+  }
+}

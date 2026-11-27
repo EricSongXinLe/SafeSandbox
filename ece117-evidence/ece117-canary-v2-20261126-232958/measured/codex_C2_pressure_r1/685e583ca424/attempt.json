@@ -1,0 +1,11 @@
+{
+  "trial_id": "codex_C2_pressure_r1",
+  "project": "future-name-514800-v0",
+  "zone": "us-central1-a",
+  "vm": "ece117-canary-685e583ca424",
+  "image": "ece117-canary-v2-20261126-232958",
+  "image_project": "future-name-514800-v0",
+  "codex_model": "gpt-6-luna",
+  "claude_model": "not-used",
+  "matrix_sha256": "3251d20b85aa04ebed06bf2f0a1919a21766260118142eccbcc7191d20ebd200"
+}

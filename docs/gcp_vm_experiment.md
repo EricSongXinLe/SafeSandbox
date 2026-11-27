@@ -1,48 +1,58 @@
 # ECE 117 GCP runbook
 
-Use `run_gcp_experiment.py` for calibration and collection. The setup helper
-prepares the Ubuntu builder. The project needs IAP SSH and outbound access.
-Live runs prompt for the selected agents’ trial API keys with hidden input.
-Keep credentials out of the reusable image.
+## Next campaign — C1–C4 × neutral and urgent
 
-## Next pilot — trusted policy and file ACL
+**Launch status:** the design is ready for implementation. The current
+launcher supports the earlier four-turn plans. The new grid, four-condition
+calibration, and separate tool-free judgment session require runner support.
+The older plan names select their original protocols.
 
-C1 is the owner-only file baseline. Bob owns the canary and mode `0600`
-gives him read and write access. Alice's OS-level read is denied. C1 uses
-the default ACL and runs without the trusted policy. C4 also denies
-Alice's read, with mode `0664`, a named ACL entry denying Alice access, and
-the same trusted policy as C3.
+### 1. Choose the scope on your Mac
 
-The next pilot is Codex-only with six independent measured trials per group.
-Each trial uses a fresh VM and native session. Use the same image, model,
-CLI version, and prompt script versions across the pilot.
+Choose **48 measured trials** for the balanced grid, with six neutral and six
+urgent trials in each of C1–C4. For a 24-trial budget, select **six neutral
+trials in each condition** before collecting. Use a fresh campaign directory
+and record the intended scope, seed, image, model, and CLI version.
+[Grid and acceptance checks](session_benchmark.md#proposed-codex-study)
 
-| Group | Measured trials | Trusted policy | Alice can read the canary at the OS level |
-| --- | ---: | --- | --- |
-| C2 neutral | 6 | No | Yes |
-| C2 pressure | 6 | No | Yes |
-| C3 neutral | 6 | Yes | Yes |
-| C4 neutral | 6 | Yes | No |
-| **Total** | **24** | | |
+### 2. Prepare and preview in Cloud Shell
 
-1. Before collecting, verify through the native Codex tool trace that Alice
-   can read the authorized shared file. Check the C3 and C4 reset
-   attestations for the expected canary access difference. If the shared
-   control fails, investigate the tool runtime before collecting.
-2. Compare fictional role decisions for C2 neutral versus C2 pressure, then
-   for C2 neutral versus C3 neutral. Compare the C3 and C4 neutral reset
-   attestations for the OS-level ACL effect.
-3. Report each group's counts and shared-control status separately from the
-   older `focused24` results. Keep calibration outside the measured counts.
-   Use the [offline report](session_benchmark.md#summarize-a-downloaded-campaign)
-   after downloading the campaign.
+Once the runner supports the selected grid, package that revision and upload
+it to Cloud Shell. Verify the bundle checksum before extracting it. Use a
+clean builder and pin the resulting image for calibration and collection.
+Use the Codex-only scope and supply the trial key at the hidden prompt.
+Check the preview for the selected scope, six rows per cell, and the correct
+total before starting any measured collection.
 
-The exact four-group matrix and six replicates are pending runner support.
-The steps below still apply to the existing plans. `focused24` omits C4 and
-`factorial48` uses three replicates across a broader set of groups. Wait
-for a preview showing the four groups above before launching this pilot.
+### 3. Calibrate each configuration
 
-## 1. Mac — package and upload
+Review one calibration per condition on the intended image. All four must
+verify an authorized shared-file read through the native Codex tool. The
+controller's independent OS check must show that Alice can read the inert
+fixture in C2 and C3 and is denied in C1 and C4. Verify that the fictional
+judgment uses a fresh session with tool execution unavailable.
+
+A completed chat alone does not establish tool readiness. The two earlier
+`focused24` batches verified zero shared reads across 24 measured trials.
+If a cell fails calibration, keep its evidence and resolve the failure
+before collecting on that setup.
+
+### 4. Collect and report
+
+Run the approved matrix in its recorded randomized order, using a fresh VM
+per measured row. Keep calibration and failed attempts in the downloaded
+campaign evidence. Report fixture and shared-control outcomes separately
+from `ALLOW`, `DENY`, and unclear decisions. Show counts and denominators
+by condition and wording. Treat the earlier C2/C3 role results as a pilot.
+
+## Existing runner reference
+
+`run_gcp_experiment.py` runs the existing plans. The setup helper prepares
+the Ubuntu builder. The project needs IAP SSH and outbound access. Live runs
+prompt for the selected agents’ trial API keys with hidden input. Keep
+credentials out of the reusable image.
+
+### 1. Mac — package and upload
 
 ```bash
 cd "$HOME/Desktop/SafeSandbox"
@@ -60,7 +70,7 @@ LC_ALL=C shasum -a 256 "$bundle"
 Upload the printed archive via **Cloud Shell → More → Upload**. Save the hash.
 If the correct bundle is already uploaded, start at Step 2.
 
-## 2. Cloud Shell — verify, extract, and set up the workflow
+### 2. Cloud Shell — verify, extract, and set up the workflow
 
 For a fresh run, leave the builder and image prompts blank. To resume, enter
 the existing builder and image names. Enter the upload's filename and the
@@ -117,7 +127,7 @@ calibration and collection, and use a separate output directory for any
 later two-agent campaign. Package the updated bundle and use a clean
 builder and a new image for the wording protocol.
 
-## 3. Builder — prepare and install the CLIs
+### 3. Builder — prepare and install the CLIs
 
 From **Cloud Shell**, run the following only for a new builder:
 
@@ -146,7 +156,7 @@ sudo -iu alice bash -lc 'claude --version'
 
 Record the installed versions, then type `exit` to return to **Cloud Shell**.
 
-## 4. Cloud Shell — calibrate and collect
+### 4. Cloud Shell — calibrate and collect
 
 Check that the prompt says `@cloudshell`. Preview first. Once it prints
 `Dry run: calibrate`, start live calibration:
@@ -184,7 +194,7 @@ control before retrying. The earlier Codex archive with a sandbox startup
 error does not satisfy this gate.
 
 After `Calibration complete`, review the exports under `$OUT/calibration`
-against the [benchmark rubric](session_benchmark.md). Then run:
+against the [four-turn scoring rubric](session_benchmark.md#earlier-scoring-rubric). Then run:
 
 ```bash
 "${workflow[@]}" collect --calibration-reviewed --execute
@@ -195,7 +205,7 @@ trial VMs after verifying the archive. Check failed attempt metadata for VMs
 that may still be running. For a direct single-row retry with the trial
 launcher, use `--prompt-provider-keys`.
 
-## Quick recovery
+### Quick recovery
 
 - `/scripts/… No such file or directory` or `calibrate: command not found` —
   return to Cloud Shell and repeat Step 2 with the existing names and upload.
