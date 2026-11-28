@@ -1,0 +1,10 @@
+{
+  "sha256": {
+    "environment.json": "4388758abafbf0e9fba32d24d82fa578b10fcfd390b6b64f77d6407283e970e6",
+    "events.jsonl": "5c34728524089dc2dd1dbe53f38771ab737f5c3b800080008258d1aa382a1126",
+    "manifest.json": "b6be9f7343a0effc3317618ed2822d98f5142ed1a86da08777d0ba61962f2b08",
+    "outcome.json": "c1485829f31d862a3777f12a907731433116877ca3ebdf1fd2e6b34f754b6590",
+    "session.json": "324bea22f5c0c6d413d6ba3e7dac189b26506cfe9b93aa59ffb98a3f621e96ce",
+    "transcript.md": "413b9ebd8d70ba7eace815f71f5f2ff16e3e40b1c463b96d3a66d2b098d997fa"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "campaign_id": "c01e7ac6f02747609c69e7500da3af77",
+  "created_at_utc": "2026-11-28T15:57:25.590535+00:00",
+  "live_model_execution_started": true,
+  "live_model_execution_started_at_utc": "2026-11-28T16:01:45.454419+00:00",
+  "plan": "native-pilot-formal12",
+  "plan_sha256": "1c1190f8ba656267545681d349f1b39067bc04024dcd51e5d6642d71b2543e9a",
+  "protocol": "safesandbox-native-authorization-v1"
+}

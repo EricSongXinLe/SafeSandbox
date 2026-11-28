@@ -1,0 +1,74 @@
+{
+  "payload": {
+    "calibrated_at_utc": "2026-11-28T15:58:52.172927+00:00",
+    "cells": [
+      {
+        "authorization": "granted",
+        "effective_os_read": true,
+        "effective_uid": 1002,
+        "expected_status": "read",
+        "fixture_mode": "0604",
+        "linux_access": "readable",
+        "observed_status": "read",
+        "parent_traversal_verified": true,
+        "reader_reached": true,
+        "verified": true
+      },
+      {
+        "authorization": "granted",
+        "effective_os_read": false,
+        "effective_uid": 1002,
+        "expected_status": "os_denied",
+        "fixture_mode": "0600",
+        "linux_access": "restricted",
+        "observed_status": "os_denied",
+        "parent_traversal_verified": true,
+        "reader_reached": true,
+        "verified": true
+      },
+      {
+        "authorization": "ungranted",
+        "effective_os_read": true,
+        "effective_uid": 1002,
+        "expected_status": "policy_denied",
+        "fixture_mode": "0604",
+        "linux_access": "readable",
+        "observed_status": "policy_denied",
+        "parent_traversal_verified": true,
+        "reader_reached": false,
+        "verified": true
+      },
+      {
+        "authorization": "ungranted",
+        "effective_os_read": false,
+        "effective_uid": 1002,
+        "expected_status": "policy_denied",
+        "fixture_mode": "0600",
+        "linux_access": "restricted",
+        "observed_status": "policy_denied",
+        "parent_traversal_verified": true,
+        "reader_reached": false,
+        "verified": true
+      }
+    ],
+    "complete": true,
+    "gcp": {
+      "bundle_sha256": "4e7993691c65c04e8eaf6eca59858fdc571af33a65c9ec20bbe373f31d21695b",
+      "image": {
+        "description": "ECE117 inert-canary bundle SHA-256 4e7993691c65c04e8eaf6eca59858fdc571af33a65c9ec20bbe373f31d21695b",
+        "id": "3883628385505068957",
+        "name": "safesandbox-native-pilot-v1"
+      },
+      "machine_type": "e2-small",
+      "plan_sha256": "1c1190f8ba656267545681d349f1b39067bc04024dcd51e5d6642d71b2543e9a",
+      "project": "future-name-514800-v0",
+      "subnet": "default",
+      "vm": "safesandbox-native-0af7a57b9d28",
+      "zone": "us-central1-a"
+    },
+    "model_sessions_launched": 0,
+    "plan_sha256": "1c1190f8ba656267545681d349f1b39067bc04024dcd51e5d6642d71b2543e9a",
+    "protocol": "safesandbox-native-authorization-v1"
+  },
+  "sha256": "2a001fb11a6ed61513683d2498c0946312dae5472dc53223e03aa37270903024"
+}

@@ -35,19 +35,38 @@ Expect 12 sessions and 28 predetermined user turns. Planning stores `plan.json`,
 
 ## 3. Package and prepare the existing GCP image workflow
 
-The bundle intentionally includes the existing suites and evidence code so the historical workflows remain reproducible.
+On your Mac, run this from the repository root. The bundle includes the existing suites and evidence code.
 
 ```bash
 bundle_dir=$(mktemp -d)
 BUNDLE="$bundle_dir/safesandbox-native-pilot.tar.gz"
-COPYFILE_DISABLE=1 tar \
+LC_ALL=C COPYFILE_DISABLE=1 tar \
   --exclude='__pycache__' --exclude='*.pyc' \
   -czf "$BUNDLE" scripts prompts tests
-BUNDLE_SHA=$(shasum -a 256 "$BUNDLE" | cut -d ' ' -f1)
+BUNDLE_SHA=$(LC_ALL=C shasum -a 256 "$BUNDLE" | cut -d ' ' -f1)
 printf 'Bundle: %s\nSHA-256: %s\n' "$BUNDLE" "$BUNDLE_SHA"
 ```
 
-Set the dedicated lab project values. Use a new image name when the bundle changes.
+Upload the printed bundle to your Cloud Shell home directory as `safesandbox-native-pilot.tar.gz`. The Mac variables and checkout are local to the Mac. In Cloud Shell, run this line by itself and paste the full 64-character SHA-256 printed on the Mac:
+
+```bash
+read -r -p 'Full SHA-256 from the Mac: ' BUNDLE_SHA
+```
+
+Then verify the uploaded bundle and enter the extracted checkout:
+
+```bash
+BUNDLE="$HOME/safesandbox-native-pilot.tar.gz"
+PILOT_DIR=$(mktemp -d "$HOME/safesandbox-native-pilot.XXXXXX")
+printf '%s  %s\n' "$BUNDLE_SHA" "$BUNDLE" | sha256sum -c - &&
+  tar -xzf "$BUNDLE" -C "$PILOT_DIR" &&
+  cd "$PILOT_DIR" &&
+  test -f scripts/build_gcp_canary_image.sh
+```
+
+Continue once the checksum prints `OK` and the final check succeeds. Run the remaining GCP commands from this directory. For Step 4, also run Step 2 in this Cloud Shell directory with the same approved model and seed, or transfer your existing frozen campaign here if you need to retain its original campaign ID.
+
+In Cloud Shell, set the dedicated lab project values. Use a new image name when the bundle changes.
 
 ```bash
 PROJECT='your-gcp-project'

@@ -1,0 +1,14 @@
+{
+  "bundle_sha256": "4e7993691c65c04e8eaf6eca59858fdc571af33a65c9ec20bbe373f31d21695b",
+  "image": {
+    "description": "ECE117 inert-canary bundle SHA-256 4e7993691c65c04e8eaf6eca59858fdc571af33a65c9ec20bbe373f31d21695b",
+    "id": "3883628385505068957",
+    "name": "safesandbox-native-pilot-v1"
+  },
+  "machine_type": "e2-small",
+  "plan_sha256": "1c1190f8ba656267545681d349f1b39067bc04024dcd51e5d6642d71b2543e9a",
+  "project": "future-name-514800-v0",
+  "subnet": "default",
+  "vm": "safesandbox-native-20bf96ab2daa",
+  "zone": "us-central1-a"
+}
