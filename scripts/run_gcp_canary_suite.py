@@ -17,6 +17,7 @@ import time
 import uuid
 
 from grid_protocol import GRID_PLAN, control_verified, grid_trial
+import defensive_protocol as defense
 import native_authorized_protocol as native
 from run_session_matrix import (
     ARTIFACT_NAMES, MAX_ARTIFACT_BYTES, PROTOCOL, read_matrix, required_artifacts, trial_id, trial_protocol,
@@ -25,7 +26,9 @@ from run_session_trial import completed_with_answer, digest, find_session_id, pa
 from provider_auth import KEY_LIMIT, prompt_provider_keys, validate_key
 
 
-def verify_export(path: Path, name: str) -> None:
+def verify_export(path: Path, name: str, *, inspect_defensive_failure: bool = False) -> dict | None:
+    is_defensive = defense.is_trial(name)
+    allowed = {defense.ARTIFACT} if is_defensive else ARTIFACT_NAMES
     with tarfile.open(path, "r:gz") as bundle:
         members = {}
         for entry in bundle:
@@ -34,7 +37,7 @@ def verify_export(path: Path, name: str) -> None:
             directory, _, filename = entry.name.partition("/")
             if (
                 directory != name
-                or filename not in ARTIFACT_NAMES | {"controller_status.json"}
+                or filename not in allowed | {"controller_status.json"}
                 or filename in members
                 or not entry.isfile()
                 or entry.size > MAX_ARTIFACT_BYTES
@@ -45,10 +48,13 @@ def verify_export(path: Path, name: str) -> None:
         if status_entry is None:
             raise ValueError("guest archive is missing controller_status.json")
         status = json.load(bundle.extractfile(status_entry))
-        if status.get("protocol") != trial_protocol(name) or status.get("complete") is not True:
+        if not isinstance(status, dict):
+            raise ValueError("invalid controller status")
+        incomplete = is_defensive and inspect_defensive_failure and status.get("complete") is False
+        if status.get("protocol") != trial_protocol(name) or (status.get("complete") is not True and not incomplete):
             raise ValueError("guest did not mark the trial complete")
         hashes = status["artifact_sha256"]
-        required = required_artifacts(name)
+        required = set(members) if incomplete else required_artifacts(name)
         if members.keys() != required or hashes.keys() != required:
             raise ValueError("exported artifact list disagrees with the trial protocol")
         for filename, entry in members.items():
@@ -56,6 +62,24 @@ def verify_export(path: Path, name: str) -> None:
                 artifact_digest = hashlib.sha256(source.read()).hexdigest()
             if artifact_digest != hashes[filename]:
                 raise ValueError(f"artifact hash mismatch: {filename}")
+        if is_defensive:
+            if status.get("trial_id") != name or status.get("suite") != defense.SUITE:
+                raise ValueError("defensive evidence identifies a different trial")
+            if incomplete and not members:
+                if status.get("failure_stage") not in {"fixture", "client", "verification"}:
+                    raise ValueError("unrecognized defensive failure")
+                return status
+            observation = json.load(bundle.extractfile(members[defense.ARTIFACT]))
+            outcome = defense.classify(name, status["reset_attestation"], observation)
+            uid = status.get("alice_uid")
+            if (
+                type(uid) is not int or uid <= 0 or type(observation.get("effective_uid")) is not int
+                or observation["effective_uid"] != uid
+                or outcome != status.get("defensive_outcome")
+                or (outcome["outcome"] == "infrastructure_failure") != incomplete
+            ):
+                raise ValueError("defensive evidence failed its UID, outcome, or completeness check")
+            return {**status, "observation": observation}
         if native.is_trial(name):
             manifest = json.load(bundle.extractfile(members["manifest.json"]))
             agent, condition, script, replicate = name.split("_")
@@ -169,7 +193,7 @@ def run_trial(
     args: argparse.Namespace, name: str, matrix_bytes: bytes, provider_key: str | None = None
 ) -> None:
     attempt = uuid.uuid4().hex[:12]
-    vm = f"ece117-canary-{attempt}"
+    vm = f"ece117-{'defense' if defense.is_trial(name) else 'canary'}-{attempt}"
     destination = args.output / name / attempt
     destination.mkdir(parents=True)
     (destination / "matrix.csv").write_bytes(matrix_bytes)
@@ -184,10 +208,13 @@ def run_trial(
         "claude_model": args.claude_model,
         "matrix_sha256": hashlib.sha256(matrix_bytes).hexdigest(),
     }
-    if native.is_trial(name):
+    if native.is_trial(name) or defense.is_trial(name):
+        is_defensive = defense.is_trial(name)
         metadata.update(
-            campaign_id=args.campaign_id, image_id=args.image_id, protocol=native.PROTOCOL,
-            suite="C", seed=native.SEED, created_at_utc=dt.datetime.now(dt.timezone.utc).isoformat(),
+            campaign_id=args.campaign_id, image_id=args.image_id, protocol=trial_protocol(name),
+            suite=defense.SUITE if is_defensive else "C",
+            seed=defense.SEED if is_defensive else native.SEED,
+            created_at_utc=dt.datetime.now(dt.timezone.utc).isoformat(),
         )
     (destination / "attempt.json").write_text(json.dumps(metadata, indent=2) + "\n")
     scope = [f"--project={args.project}", f"--zone={args.zone}"]
@@ -280,6 +307,11 @@ def main() -> None:
         and (args.provider_keys_stdin or args.prompt_provider_keys)
     ):
         raise SystemExit("authorized execution requires its campaign, image identity, and runtime key")
+    if any(defense.is_trial(name) for name in names) and not (
+        all(defense.is_trial(name) for name in names) and args.campaign_id and args.image_id
+        and not (args.provider_keys_stdin or args.prompt_provider_keys)
+    ):
+        raise SystemExit("defensive execution requires its campaign and image identity, without provider keys")
     agents = tuple(sorted({name.partition("_")[0] for name in names}))
     try:
         keys: dict[str, str] = {}
@@ -295,8 +327,8 @@ def main() -> None:
     for name in names:
         try:
             if args.skip_completed:
-                if not (grid_trial(name) or native.is_trial(name)):
-                    raise ValueError("--skip-completed applies to the Codex grid and authorized suite")
+                if not (grid_trial(name) or native.is_trial(name) or defense.is_trial(name)):
+                    raise ValueError("--skip-completed requires a verified campaign plan")
                 for archive in sorted((args.output / name).glob("*/evidence.tar.gz")):
                     metadata = json.loads(archive.with_name("attempt.json").read_text())
                     if (
@@ -306,10 +338,10 @@ def main() -> None:
                         or metadata.get("image_project") != (args.image_project or args.project)
                         or metadata.get("zone") != args.zone
                         or metadata.get("codex_model") != args.codex_model
-                        or (native.is_trial(name) and (
+                        or ((native.is_trial(name) or defense.is_trial(name)) and (
                             metadata.get("campaign_id") != args.campaign_id
                             or metadata.get("image_id") != args.image_id
-                            or metadata.get("protocol") != native.PROTOCOL
+                            or metadata.get("protocol") != trial_protocol(name)
                         ))
                     ):
                         raise ValueError(f"prior attempt does not match this campaign: {archive.parent}")

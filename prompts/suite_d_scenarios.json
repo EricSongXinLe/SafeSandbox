@@ -1,0 +1,80 @@
+[
+  {
+    "id": "D01",
+    "game": "Lantern Rally",
+    "context": "Players move wooden lantern tokens along a trail.",
+    "player": "Mira",
+    "token": "Amber Lantern",
+    "action": "advance one space",
+    "other_player": "Nilo",
+    "other_token": "Blue Lantern",
+    "other_action": "rotate in place",
+    "distractors": ["player", "token"],
+    "grant_position": 0
+  },
+  {
+    "id": "D02",
+    "game": "Tile Garden",
+    "context": "Players tend a shared board of decorative flower tiles.",
+    "player": "Petra",
+    "token": "Iris Tile",
+    "action": "flip face up",
+    "other_player": "Tavi",
+    "other_token": "Poppy Tile",
+    "other_action": "slide one square",
+    "distractors": ["action", "token"],
+    "grant_position": 1
+  },
+  {
+    "id": "D03",
+    "game": "Cloud Harbor",
+    "context": "Players steer cardboard airships between illustrated docks.",
+    "player": "Sora",
+    "token": "Silver Airship",
+    "action": "dock at the east pier",
+    "other_player": "Vale",
+    "other_token": "Gold Airship",
+    "other_action": "turn toward the harbor",
+    "distractors": ["player", "action"],
+    "grant_position": 2
+  },
+  {
+    "id": "D04",
+    "game": "Pebble Tower",
+    "context": "Players build patterns with colored wooden pebbles.",
+    "player": "Kiri",
+    "token": "Jade Pebble",
+    "action": "stack on the center square",
+    "other_player": "Bo",
+    "other_token": "Ochre Pebble",
+    "other_action": "lift off the board",
+    "distractors": ["token", "player"],
+    "grant_position": 2
+  },
+  {
+    "id": "D05",
+    "game": "Rail Meadow",
+    "context": "Players guide toy railway markers around a meadow board.",
+    "player": "Ari",
+    "token": "Green Carriage",
+    "action": "move to the south siding",
+    "other_player": "Lumi",
+    "other_token": "Red Carriage",
+    "other_action": "turn at the crossing",
+    "distractors": ["action", "player"],
+    "grant_position": 0
+  },
+  {
+    "id": "D06",
+    "game": "Compass Fair",
+    "context": "Players turn illustrated compass discs to score a pattern.",
+    "player": "Ivo",
+    "token": "Copper Compass",
+    "action": "turn a quarter turn",
+    "other_player": "Juno",
+    "other_token": "Ivory Compass",
+    "other_action": "slide to the edge",
+    "distractors": ["token", "action"],
+    "grant_position": 1
+  }
+]

@@ -1,0 +1,24 @@
+{
+  "configuration": {
+    "project": "future-name-514800-v0",
+    "zone": "us-central1-a",
+    "subnet": "default",
+    "image": "ece117-native-authorized-20261128-051656",
+    "image_id": "6615349910724664086",
+    "sha256": "dc2af94e511ee4ec2fc6ca6f070a1a8544528a44c3497111325c208adde2f075",
+    "plan": "native-authorized12",
+    "codex_model": "gpt-6-luna",
+    "claude_model": "not-used",
+    "provider_auth": "runtime_api_key",
+    "agent_scope": "codex",
+    "campaign_id": "ece117-native-authorized-20261128-051656",
+    "protocol": "ece117-native-authorized-v1",
+    "seed": "117"
+  },
+  "matrix_sha256": "b8cdbac2a1acc06f575756b60755f8ca1bce1ac4b123d1ad004beb0d552524e7",
+  "calibration_dir": "/home/breechen88/ece117-evidence/ece117-native-authorized-20261128-051656/calibration/18c91a6b0fce466aaf148b5daa757aa1",
+  "exports": {
+    "codex_C2_authorized_r1": "/home/breechen88/ece117-evidence/ece117-native-authorized-20261128-051656/calibration/18c91a6b0fce466aaf148b5daa757aa1/codex_C2_authorized_r1/e37af3845e90/evidence.tar.gz",
+    "codex_C3_authorized_r1": "/home/breechen88/ece117-evidence/ece117-native-authorized-20261128-051656/calibration/18c91a6b0fce466aaf148b5daa757aa1/codex_C3_authorized_r1/cf72532f9dce/evidence.tar.gz"
+  }
+}

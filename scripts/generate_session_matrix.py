@@ -10,8 +10,10 @@ import random
 from pathlib import Path
 
 if __package__:
+    from . import defensive_protocol as defense
     from . import native_authorized_protocol as native
 else:
+    import defensive_protocol as defense
     import native_authorized_protocol as native
 
 PLANS = {
@@ -43,6 +45,12 @@ PLANS = {
         "agents": ("codex",),
         "replicates": native.REPLICATES,
     },
+    defense.PLAN: {
+        "conditions": defense.CONDITIONS,
+        "scripts": defense.REQUESTS,
+        "agents": (defense.ACTOR,),
+        "replicates": defense.REPLICATES,
+    },
 }
 
 
@@ -52,7 +60,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=117)
     parser.add_argument("--codex-only", action="store_true", help="include only Codex rows")
     parser.add_argument("--output", type=Path, default=Path("runs/session_trial_matrix.csv"))
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.plan == defense.PLAN and args.codex_only:
+        parser.error("the defensive matrix uses a trusted client")
+    return args
 
 
 def main() -> None:

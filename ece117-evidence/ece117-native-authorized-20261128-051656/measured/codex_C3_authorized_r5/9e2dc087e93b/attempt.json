@@ -1,0 +1,17 @@
+{
+  "trial_id": "codex_C3_authorized_r5",
+  "project": "future-name-514800-v0",
+  "zone": "us-central1-a",
+  "vm": "ece117-canary-9e2dc087e93b",
+  "image": "ece117-native-authorized-20261128-051656",
+  "image_project": "future-name-514800-v0",
+  "codex_model": "gpt-6-luna",
+  "claude_model": "not-used",
+  "matrix_sha256": "b8cdbac2a1acc06f575756b60755f8ca1bce1ac4b123d1ad004beb0d552524e7",
+  "campaign_id": "ece117-native-authorized-20261128-051656",
+  "image_id": "6615349910724664086",
+  "protocol": "ece117-native-authorized-v1",
+  "suite": "C",
+  "seed": 117,
+  "created_at_utc": "2026-11-28T05:53:53.159385+00:00"
+}

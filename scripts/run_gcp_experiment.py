@@ -17,6 +17,8 @@ import uuid
 
 from run_gcp_canary_suite import verify_export
 from grid_protocol import GRID_CALIBRATIONS, GRID_CONDITIONS, GRID_PLAN, GRID_SCRIPTS, grid_trial
+import defensive_mutation
+import defensive_protocol as defense
 import native_authorized_protocol as native
 from provider_auth import prompt_provider_keys
 from run_session_matrix import read_matrix
@@ -28,14 +30,17 @@ CALIBRATION_IDS = ("codex_C3_pressure_r1", "claude_C3_pressure_r1")
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("phase", choices=("calibrate", "collect"))
-    for option in ("project", "zone", "subnet", "image", "codex-model"):
+    for option in ("project", "zone", "subnet", "image"):
         parser.add_argument(f"--{option}", required=True)
+    parser.add_argument("--codex-model", help="required for plans that use an agent")
     parser.add_argument("--claude-model", help="required unless --codex-only is selected")
     parser.add_argument("--bundle", required=True, type=Path)
     parser.add_argument("--sha256", required=True, help="trusted checksum for the uploaded bundle")
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument(
-        "--plan", choices=("focused24", "factorial48", "wording24", GRID_PLAN, native.PLAN), default="focused24",
+        "--plan",
+        choices=("focused24", "factorial48", "wording24", GRID_PLAN, native.PLAN, defense.PLAN),
+        default="focused24",
     )
     parser.add_argument("--codex-only", action="store_true",
                         help="use a separate matrix and receipt for Codex-only collection")
@@ -50,6 +55,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--calibration-reviewed", action="store_true",
                         help="confirm the exported calibration traces and selected controls were reviewed")
     args = parser.parse_args()
+    if args.plan == defense.PLAN:
+        if args.agent or args.codex_only or args.use_vm_auth or args.codex_model or args.claude_model:
+            parser.error("the defensive plan uses the trusted client and requires no model or provider auth")
+        args.codex_model = args.claude_model = "not-used"
+        return args
+    if not args.codex_model:
+        parser.error("--codex-model is required for agent plans")
     if args.plan in {GRID_PLAN, native.PLAN}:
         if args.agent or args.use_vm_auth:
             parser.error("the selected plan calibrates its full Codex scope and requires a runtime OpenAI key")
@@ -71,7 +83,7 @@ def verify_bundle(path: Path, checksum: str) -> None:
         for script in ("build_gcp_canary_image.sh", "provider_auth.py",
                        "run_gcp_canary_suite.py", "generate_session_matrix.py",
                        "run_session_matrix.py", "run_session_trial.py", "grid_protocol.py",
-                       "native_authorized_protocol.py"):
+                       "native_authorized_protocol.py", "defensive_protocol.py", "defensive_mutation.py"):
             content = archive.extractfile(f"scripts/{script}")
             if content is None or content.read() != (SCRIPTS / script).read_bytes():
                 raise ValueError(f"run this workflow from the matching bundle: {script}")
@@ -94,7 +106,11 @@ def image_identity(args: argparse.Namespace) -> str:
 
 
 def check_calibration(path: Path, name: str) -> None:
-    verify_export(path, name)
+    status = verify_export(path, name)
+    if defense.is_trial(name):
+        if not status["defensive_outcome"]["expected_enforcement"]:
+            raise ValueError("defensive calibration produced an unexpected enforcement outcome")
+        return
     with tarfile.open(path, "r:gz") as archive:
         for turn in range(2 if grid_trial(name) or native.is_trial(name) else 4):
             status_file = f"{name}/turn_{turn:02}_status.json"
@@ -113,9 +129,10 @@ def verified_attempt(
     expected.update(
         trial_id=name, image_project=configuration["project"], matrix_sha256=matrix_sha256
     )
-    if native.is_trial(name):
+    if native.is_trial(name) or defense.is_trial(name):
         expected.update(
-            campaign_id=configuration["campaign_id"], image_id=configuration["image_id"], protocol=native.PROTOCOL,
+            campaign_id=configuration["campaign_id"], image_id=configuration["image_id"],
+            protocol=configuration["protocol"],
         )
     for archive in sorted((calibration / name).glob("*/evidence.tar.gz")):
         metadata = json.loads(archive.with_name("attempt.json").read_text(encoding="utf-8"))
@@ -125,6 +142,8 @@ def verified_attempt(
             check_calibration(archive, name)
         except (EOFError, KeyError, OSError, ValueError, tarfile.TarError):
             continue  # Keep the failed attempt and look for another verified export.
+        if defense.is_trial(name):
+            return archive
         with tarfile.open(archive, "r:gz") as bundle:
             with bundle.extractfile(f"{name}/manifest.json") as manifest:
                 data = json.load(manifest)
@@ -150,10 +169,12 @@ def main() -> None:
         calibration_ids = GRID_CALIBRATIONS
     elif args.plan == native.PLAN:
         calibration_ids = native.CALIBRATIONS
+    elif args.plan == defense.PLAN:
+        calibration_ids = defense.CALIBRATIONS
     elif args.codex_only:
         calibration_ids = calibration_ids[:1]
     selected = tuple(name for name in calibration_ids if not args.agent or name.startswith(args.agent + "_"))
-    scope = "codex" if args.codex_only else "both"
+    scope = defense.ACTOR if args.plan == defense.PLAN else ("codex" if args.codex_only else "both")
     if not args.execute:
         setting = f"build from {args.builder}" if args.builder else f"reuse {args.image}"
         print(f"Dry run: {args.phase} in {args.project}/{args.zone}, {setting}")
@@ -164,6 +185,8 @@ def main() -> None:
                 print(f"  {condition}: role-neutral=6, role-urgent=6")
         elif args.plan == native.PLAN:
             print(f"12 measured trials. Six authorized tasks in each of C2 and C3. Seed={native.SEED}.")
+        elif args.plan == defense.PLAN:
+            print(f"24 measured trials. Six per grant/OS cell. Seed={defense.SEED}. No model calls.")
         if args.phase == "calibrate":
             print(f"Calibration rows: {', '.join(selected)}")
         return
@@ -180,21 +203,36 @@ def main() -> None:
 
 def check_fixed_matrix(matrix: Path, plan: str) -> None:
     counts = Counter((row["agent"], row["condition"], row["script"], row["replicate"]) for row in read_matrix(matrix))
-    conditions, scripts, replicates = (
-        (native.CONDITIONS, (native.SCRIPT,), native.REPLICATES)
-        if plan == native.PLAN else (GRID_CONDITIONS, GRID_SCRIPTS, 6)
-    )
+    if plan == defense.PLAN:
+        actor, conditions, scripts, replicates = defense.ACTOR, defense.CONDITIONS, defense.REQUESTS, defense.REPLICATES
+    elif plan == native.PLAN:
+        actor, conditions, scripts, replicates = "codex", native.CONDITIONS, (native.SCRIPT,), native.REPLICATES
+    else:
+        actor, conditions, scripts, replicates = "codex", GRID_CONDITIONS, GRID_SCRIPTS, 6
     expected = {
-        ("codex", condition, wording, str(replicate)): 1
+        (actor, condition, wording, str(replicate)): 1
         for condition in conditions for wording in scripts for replicate in range(1, replicates + 1)
     }
     if counts != expected:
-        raise ValueError(f"{plan} matrix must contain all {len(expected)} prescribed Codex trials exactly once")
+        raise ValueError(f"{plan} matrix must contain all {len(expected)} prescribed trials exactly once")
+
+
+def verify_defensive_reference(output: Path, *, calibrating: bool) -> None:
+    path = output / "defensive_mutation.json"
+    expected = defensive_mutation.compare()
+    if expected["corrected_incorrect"] != 0 or expected["faulty_reference_incorrect"] != 2:
+        raise ValueError("defensive mutation oracle failed")
+    if calibrating and not path.exists():
+        with path.open("x", encoding="utf-8") as target:
+            json.dump(expected, target, indent=2)
+    if json.loads(path.read_text(encoding="utf-8")) != expected:
+        raise ValueError("defensive mutation record differs from this protocol")
 
 
 def execute(args: argparse.Namespace, calibration_ids: tuple, selected: tuple, scope: str) -> None:
     is_authorized = args.plan == native.PLAN
-    verified_campaign = args.plan == GRID_PLAN or is_authorized
+    is_defensive = args.plan == defense.PLAN
+    verified_campaign = args.plan == GRID_PLAN or is_authorized or is_defensive
     receipt = args.output / "calibration.json"
     measured = args.output / "measured"
     if args.phase == "calibrate" and receipt.exists():
@@ -204,6 +242,8 @@ def execute(args: argparse.Namespace, calibration_ids: tuple, selected: tuple, s
             raise ValueError("collect requires a successful calibration and --calibration-reviewed")
         if measured.exists() and not verified_campaign:
             raise ValueError("measured output already exists; use the trial launcher for outstanding rows")
+    if is_defensive:
+        verify_defensive_reference(args.output, calibrating=args.phase == "calibrate")
 
     if args.builder:
         run(
@@ -216,12 +256,19 @@ def execute(args: argparse.Namespace, calibration_ids: tuple, selected: tuple, s
         "project": args.project, "zone": args.zone, "subnet": args.subnet,
         "image": args.image, "image_id": image_identity(args), "sha256": args.sha256,
         "plan": args.plan, "codex_model": args.codex_model, "claude_model": args.claude_model,
-        "provider_auth": "vm_configured" if args.use_vm_auth else "runtime_api_key",
+        "provider_auth": "not-required" if is_defensive else (
+            "vm_configured" if args.use_vm_auth else "runtime_api_key"
+        ),
     }
     if args.codex_only:
         configuration["agent_scope"] = scope
     if is_authorized:
         configuration.update(campaign_id=args.output.resolve().name, protocol=native.PROTOCOL, seed=str(native.SEED))
+    if is_defensive:
+        configuration.update(
+            campaign_id=args.output.resolve().name, protocol=defense.PROTOCOL, seed=str(defense.SEED),
+            agent_scope=defense.ACTOR,
+        )
     matrix_suffix = "-codex" if args.codex_only else ""
     matrix = args.output / f"{args.plan}{matrix_suffix}.csv"
     launcher = [
@@ -230,9 +277,9 @@ def execute(args: argparse.Namespace, calibration_ids: tuple, selected: tuple, s
         "--image", args.image, "--codex-model", args.codex_model,
         "--claude-model", args.claude_model, "--execute",
     ]
-    if not args.use_vm_auth:
+    if not args.use_vm_auth and not is_defensive:
         launcher.append("--provider-keys-stdin")
-    if is_authorized:
+    if is_authorized or is_defensive:
         launcher.extend(["--campaign-id", configuration["campaign_id"], "--image-id", configuration["image_id"]])
     if args.phase == "calibrate":
         calibration_root = args.output / "calibration"
@@ -242,7 +289,7 @@ def execute(args: argparse.Namespace, calibration_ids: tuple, selected: tuple, s
                 raise ValueError("--resume-calibration must be an existing run directory under --output/calibration")
         else:
             run(sys.executable, str(SCRIPTS / "generate_session_matrix.py"),
-                "--plan", args.plan, "--seed", str(native.SEED if is_authorized else 117), "--output", str(matrix),
+                "--plan", args.plan, "--seed", configuration.get("seed", "117"), "--output", str(matrix),
                 *(("--codex-only",) if args.codex_only else ()))
             calibration = calibration_root / uuid.uuid4().hex
         if verified_campaign:
@@ -258,7 +305,7 @@ def execute(args: argparse.Namespace, calibration_ids: tuple, selected: tuple, s
                     print(f"Reusing verified {name}: {archive}")
         pending = [name for name in selected if name not in verified]
         agents = tuple(dict.fromkeys(name.partition("_")[0] for name in pending))
-        keys = prompt_provider_keys(agents) if agents and not args.use_vm_auth else {}
+        keys = prompt_provider_keys(agents) if agents and not args.use_vm_auth and not is_defensive else {}
         for name in pending:
             agent = name.partition("_")[0]
             key_input = json.dumps({agent: keys[agent]}) if keys else None
@@ -299,7 +346,7 @@ def execute(args: argparse.Namespace, calibration_ids: tuple, selected: tuple, s
                 if archive is None or str(archive.resolve()) != record["exports"][name]:
                     raise ValueError(f"calibration is missing or changed: {name}")
         agents = tuple(dict.fromkeys(name.partition("_")[0] for name in calibration_ids))
-        keys = {} if args.use_vm_auth else prompt_provider_keys(agents)
+        keys = {} if args.use_vm_auth or is_defensive else prompt_provider_keys(agents)
         measured.mkdir(exist_ok=verified_campaign)
         if verified_campaign:
             launcher.append("--skip-completed")

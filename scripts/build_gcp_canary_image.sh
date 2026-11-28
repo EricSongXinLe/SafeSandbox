@@ -84,6 +84,10 @@ guest_check_image() {
     sudo -n cmp -s - /opt/ece117/BUNDLE.sha256 ||
     fail 'installed bundle checksum differs. Run prepare on a clean builder.'
   ensure_alice_has_no_sudo
+  if [[ $scope == trusted ]]; then
+    sudo -n -iu alice -- python3 --version || fail 'Python is missing or cannot run as Alice'
+    return
+  fi
   sudo -n -iu alice -- codex --version || fail 'Codex CLI is missing or cannot run as Alice'
   if [[ $scope == both ]]; then
     sudo -n -iu alice -- claude --version || fail 'Claude Code CLI is missing or cannot run as Alice'
@@ -99,8 +103,8 @@ Required for image/build: IMAGE
 Optional: BUNDLE (defaults to $HOME/ece117-canary-v2.tar.gz)
 
 prepare uploads, installs, and tests on a running dedicated builder.
-image verifies the install and both CLIs, stops the builder, and creates IMAGE.
-build combines prepare and image. Use when both pinned CLIs are preinstalled.
+image verifies the install and selected runtime, stops the builder, and creates IMAGE.
+build combines prepare and image. ECE117_TRIAL_AGENTS selects both, codex, or trusted.
 --create-builder creates a billable stock Ubuntu builder for prepare or build.
 An IAP-enabled subnet with approved outbound access is a prerequisite.
 EOF
@@ -157,7 +161,8 @@ fi
 
 if [[ $mode != prepare ]]; then
   trial_agents=${ECE117_TRIAL_AGENTS:-both}
-  [[ $trial_agents == both || $trial_agents == codex ]] || fail 'invalid ECE117_TRIAL_AGENTS'
+  [[ $trial_agents == both || $trial_agents == codex || $trial_agents == trusted ]] ||
+    fail 'invalid ECE117_TRIAL_AGENTS'
   "${ssh[@]}" --ssh-flag=-T --command="bash -s -- _guest_check_image $BUNDLE_SHA $trial_agents" < "$script_file"
   boot_disk=$(
     gcloud compute instances describe "$BUILDER" "${scope[@]}" --format=json |

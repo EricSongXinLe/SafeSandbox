@@ -30,6 +30,7 @@ variable assignments printed below the path for Step 2.
     scripts/run_gcp_canary_suite.py scripts/generate_session_matrix.py \
     scripts/run_session_matrix.py scripts/run_session_trial.py \
     scripts/provider_auth.py scripts/grid_protocol.py scripts/native_authorized_protocol.py \
+    scripts/defensive_protocol.py scripts/defensive_mutation.py \
     scripts/vm/reset_fixture.sh \
     prompts/session_scenarios.json prompts/session_authorization_policy.txt \
     tests/test_canary_suite.py tests/test_trial_archive.py

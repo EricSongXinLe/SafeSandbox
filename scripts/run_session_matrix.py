@@ -20,10 +20,12 @@ import subprocess
 import sys
 
 if __package__:
+    from . import defensive_protocol as defense
     from . import native_authorized_protocol as native
     from .grid_protocol import GRID_PLAN, GRID_SCRIPTS, grid_trial
     from .run_session_trial import parse_events
 else:
+    import defensive_protocol as defense
     import native_authorized_protocol as native
     from grid_protocol import GRID_PLAN, GRID_SCRIPTS, grid_trial
     from run_session_trial import parse_events
@@ -35,8 +37,8 @@ LAB_MARKER = Path("/etc/ece117-lab-only")
 EXPECTED_MARKER = "ECE117-INERT-CANARY-V2"
 ALLOWED_CONDITIONS = {"C1", "C2", "C3", "C4"}
 PROTOCOL = "inert-canary-v2"
-ALLOWED_SCRIPTS = {"neutral", "pressure", "plain", "urgency", *GRID_SCRIPTS, native.SCRIPT}
-ALLOWED_AGENTS = {"codex", "claude"}
+ALLOWED_SCRIPTS = {"neutral", "pressure", "plain", "urgency", *GRID_SCRIPTS, native.SCRIPT, *defense.REQUESTS}
+ALLOWED_AGENTS = {"codex", "claude", defense.ACTOR}
 ARTIFACT_NAMES = {"manifest.json"} | {
     f"turn_{index:02}_{suffix}"
     for index in range(4)
@@ -96,6 +98,10 @@ def read_matrix(path: Path) -> list[dict[str, str]]:
             raise RuntimeError(f"line {line_number}: the Codex grid requires Codex")
         if script == native.SCRIPT and (agent != "codex" or condition not in native.CONDITIONS):
             raise RuntimeError(f"line {line_number}: authorized trials require Codex in C2 or C3")
+        if (agent == defense.ACTOR or script in defense.REQUESTS) and not defense.is_trial(
+            f"{agent}_{condition}_{script}_r{replicate}"
+        ):
+            raise RuntimeError(f"line {line_number}: defensive trials require the trusted client and C2 or C4")
         if replicate < 1:
             raise RuntimeError(f"line {line_number}: replicate must be at least 1")
         key = (agent, condition, script, replicate)
@@ -111,10 +117,14 @@ def trial_id(row: dict[str, str]) -> str:
 
 
 def trial_protocol(name: str) -> str:
+    if defense.is_trial(name):
+        return defense.PROTOCOL
     return native.PROTOCOL if native.is_trial(name) else PROTOCOL
 
 
 def required_artifacts(name: str) -> set[str]:
+    if defense.is_trial(name):
+        return {defense.ARTIFACT}
     two_turns = grid_trial(name) or native.is_trial(name)
     return {
         filename for filename in ARTIFACT_NAMES
@@ -232,6 +242,43 @@ def run_as_alice(
     )
 
 
+def run_defensive(row, destination: Path, fixture: dict, alice_user: str, alice_uid: int) -> None:
+    name = trial_id(row)
+    status = {
+        "protocol": defense.PROTOCOL, "suite": defense.SUITE, "trial_id": name,
+        "complete": False, "reset_attestation": fixture, "alice_uid": alice_uid,
+        "controller_started_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "artifact_sha256": {},
+    }
+    stage = "fixture"
+    try:
+        defense.expectations(name, fixture)
+        stage = "client"
+        checked = run_as_alice(alice_user, [
+            "python3", str(SESSION_RUNNER.with_name("defensive_protocol.py")), "--probe", row["script"],
+        ])
+        if checked.returncode != 0:
+            raise ValueError("trusted client exited unsuccessfully")
+        observation = json.loads(checked.stdout)
+        if not isinstance(observation, dict) or observation.get("effective_uid") != alice_uid:
+            raise ValueError("trusted client did not attest the expected unprivileged UID")
+        stage = "verification"
+        outcome = defense.classify(name, fixture, observation)
+        content = (json.dumps(observation, indent=2) + "\n").encode()
+        (destination / defense.ARTIFACT).write_bytes(content)
+        status["artifact_sha256"][defense.ARTIFACT] = hashlib.sha256(content).hexdigest()
+        status["defensive_outcome"] = outcome
+        status["complete"] = outcome["outcome"] != "infrastructure_failure"
+        if not status["complete"]:
+            status["failure_stage"] = "reader"
+    except (OSError, ValueError, TypeError, KeyError) as error:
+        status.update(failure_stage=stage, archive_error=str(error))
+    status["controller_finished_at_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
+    (destination / "controller_status.json").write_text(json.dumps(status, indent=2) + "\n", encoding="utf-8")
+    if not status["complete"]:
+        raise RuntimeError(f"defensive check incomplete in {status['failure_stage']}: {name}")
+
+
 def main() -> None:
     os.umask(0o077)
     args = parse_args()
@@ -246,8 +293,10 @@ def main() -> None:
         rows = rows[: args.max_trials]
     if args.provider_key_stdin and (not args.execute or len(rows) != 1):
         raise RuntimeError("runtime provider authentication requires exactly one executed trial")
+    if args.provider_key_stdin and any(defense.is_trial(trial_id(row)) for row in rows):
+        raise RuntimeError("defensive trials run without provider authentication")
     provider_key = sys.stdin.read(4097) if args.provider_key_stdin else None
-    models = {"codex": args.codex_model, "claude": args.claude_model}
+    models = {"codex": args.codex_model, "claude": args.claude_model, defense.ACTOR: "not-used"}
     if args.execute:
         if os.geteuid() != 0:
             raise RuntimeError("--execute must run as root on the disposable VM")
@@ -299,6 +348,7 @@ def main() -> None:
         name = trial_id(row)
         is_authorized = native.is_trial(name)
         is_grid = grid_trial(name)
+        is_defensive = defense.is_trial(name)
         protocol = trial_protocol(name)
         staged = args.staging_dir / name
         destination = args.archive_dir / name
@@ -315,16 +365,23 @@ def main() -> None:
             check=False,
         )
         if reset.returncode != 0:
-            if is_grid or is_authorized:
-                (destination / "controller_status.json").write_text(json.dumps({
+            if is_grid or is_authorized or is_defensive:
+                failure = {
                     "protocol": protocol, "complete": False,
                     "failure_stage": "fixture", "artifact_sha256": {},
                     "runner_stderr": reset.stderr,
-                }, indent=2) + "\n", encoding="utf-8")
+                }
+                if is_defensive:
+                    failure.update(suite=defense.SUITE, trial_id=name)
+                (destination / "controller_status.json").write_text(json.dumps(failure, indent=2) + "\n",
+                                                                     encoding="utf-8")
             raise RuntimeError(f"fixture reset failed for {name}: {reset.stderr.strip()}")
         reset_attestation = json.loads(
             Path("/var/lib/ece117-admin/last_reset.json").read_text(encoding="utf-8")
         )
+        if is_defensive:
+            run_defensive(row, destination, reset_attestation, args.alice_user, alice_uid)
+            continue
         if (
             reset_attestation.get("protocol") != PROTOCOL
             or reset_attestation.get("condition") != row["condition"]

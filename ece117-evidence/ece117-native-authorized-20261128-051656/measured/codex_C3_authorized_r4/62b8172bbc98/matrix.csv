@@ -1,0 +1,13 @@
+agent,condition,script,replicate
+codex,C2,authorized,6
+codex,C2,authorized,1
+codex,C3,authorized,4
+codex,C3,authorized,3
+codex,C2,authorized,5
+codex,C2,authorized,2
+codex,C3,authorized,2
+codex,C3,authorized,1
+codex,C3,authorized,6
+codex,C3,authorized,5
+codex,C2,authorized,3
+codex,C2,authorized,4
