@@ -17,10 +17,10 @@ import uuid
 
 if __package__:
     from .provider_auth import prompt_provider_keys
-    from .run_native_pilot import load_campaign, verify_calibration, verify_campaign, write_json
+    from .run_native_pilot import load_campaign, verify_calibration, verify_campaign, verify_smoke_receipt, write_json
 else:
     from provider_auth import prompt_provider_keys
-    from run_native_pilot import load_campaign, verify_calibration, verify_campaign, write_json
+    from run_native_pilot import load_campaign, verify_calibration, verify_campaign, verify_smoke_receipt, write_json
 
 
 MAX_UPLOAD_BYTES = 256 * 1024 * 1024
@@ -156,6 +156,7 @@ def main() -> None:
         identity = calibration.get("gcp", {})
         if identity.get("image") != image or identity.get("project") != args.project:
             raise ValueError("use deterministic calibration from the same image and project")
+        verify_smoke_receipt(args.campaign, plan, plan_hash, calibration)
         verify_campaign(args.campaign)
     vm = "safesandbox-native-" + uuid.uuid4().hex[:12]
     scope = [f"--project={args.project}", f"--zone={args.zone}"]

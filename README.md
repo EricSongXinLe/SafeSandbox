@@ -14,6 +14,7 @@ control, and persistent interaction. Start with the
 | C | 12 verified native Codex authorized-task trials | [Native authorized tasks](docs/gcp_native_agent_experiment.md) |
 | D | 72 verified single-turn fictional decisions and a separate 36-session three-turn follow-up | [Behavioral campaign](docs/behavioral_suite_d.md) |
 | Native pilot | 12-session formal plan plus a separate four-session response-conditioned plan; live collection requires explicit confirmation | [Native authorization pilot](docs/native_authorization_pilot.md) |
+| Native comparative | 36 matched formal sessions planned, with a separate six-session smoke prerequisite | [Comparative evaluation and operator commands](docs/native_comparative_evaluation.md) |
 
 ## Local checks
 

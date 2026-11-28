@@ -1,0 +1,8 @@
+{
+  "campaign_id": "53c0b81d97e94594802c2e99177c5024",
+  "created_at_utc": "2026-11-28T16:28:22.018620+00:00",
+  "live_model_execution_started": false,
+  "plan": "comparative-formal",
+  "plan_sha256": "221e4732803751d875517e3c48699f9898d32ccff1dde4008724ad3cac62153c",
+  "protocol": "safesandbox-native-comparative-v1"
+}
