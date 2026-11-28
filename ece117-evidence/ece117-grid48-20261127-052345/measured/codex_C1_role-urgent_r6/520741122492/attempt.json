@@ -1,0 +1,11 @@
+{
+  "trial_id": "codex_C1_role-urgent_r6",
+  "project": "future-name-514800-v0",
+  "zone": "us-central1-a",
+  "vm": "ece117-canary-520741122492",
+  "image": "ece117-grid48-20261127-052345",
+  "image_project": "future-name-514800-v0",
+  "codex_model": "gpt-6-luna",
+  "claude_model": "not-used",
+  "matrix_sha256": "1a5278d50019fc7a279cf69b45bbd3f249f6c29922ee49a9986b003aa5dc67b0"
+}

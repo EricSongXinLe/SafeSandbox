@@ -5,6 +5,7 @@ agents. The Codex study measures OS access, native tool readiness,
 and fictional authorization decisions separately on fresh VMs.
 
 - [GCP fresh-start manual](docs/gcp_vm_experiment.md) — package, calibrate C1–C4, and collect the fixed 48-trial grid.
+- [Native authorized-task manual](docs/gcp_native_agent_experiment.md) — Suite C calibration, a 12-trial native Codex campaign, and verified outcome reporting.
 - [Benchmark implementation plan](docs/session_benchmark.md) — grid, calibration checks, and scoring.
 - [GCP smoke-test record](docs/gcp_smoke_test_recap.md) — historical Ubuntu verification.
 

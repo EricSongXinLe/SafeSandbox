@@ -1,5 +1,8 @@
 # ECE 117 GCP fresh-start manual
 
+For the separate native authorized-task evaluation, use the
+[Suite C operator manual](gcp_native_agent_experiment.md).
+
 This campaign runs **48 measured Codex trials**. Each of C1–C4 has six
 neutral and six urgent rows. Four separate calibration trials must pass
 before collection. See the [implementation plan](session_benchmark.md#proposed-codex-study)
@@ -26,7 +29,8 @@ variable assignments printed below the path for Step 2.
     scripts/build_gcp_canary_image.sh scripts/run_gcp_experiment.py \
     scripts/run_gcp_canary_suite.py scripts/generate_session_matrix.py \
     scripts/run_session_matrix.py scripts/run_session_trial.py \
-    scripts/provider_auth.py scripts/grid_protocol.py scripts/vm/reset_fixture.sh \
+    scripts/provider_auth.py scripts/grid_protocol.py scripts/native_authorized_protocol.py \
+    scripts/vm/reset_fixture.sh \
     prompts/session_scenarios.json prompts/session_authorization_policy.txt \
     tests/test_canary_suite.py tests/test_trial_archive.py
   checksum="$(LC_ALL=C shasum -a 256 "$bundle")"
@@ -88,8 +92,17 @@ and four calibration rows. The preview creates no VMs.
 
 ## 3. Cloud Shell — prepare the builder
 
-Run this on the first attempt. If the builder already exists, omit
-`--create-builder` and run `prepare` again.
+Check whether the image already exists:
+
+```bash
+gcloud compute images describe "$IMAGE" --project="$PROJECT" --format='value(status)'
+```
+
+If the image is `READY`, skip all builder and installation commands in
+this step. Use the existing-image command in Step 4. The builder is normally
+stopped after imaging. If the image is missing, prepare the builder below.
+If the builder already exists, omit `--create-builder`. The builder must
+be running for preparation and installation.
 
 ```bash
 bash "${operator_dir:?Complete Step 2 first}/scripts/build_gcp_canary_image.sh" \
@@ -110,12 +123,22 @@ gcloud compute ssh "$BUILDER" --project="$PROJECT" --zone="$ZONE" \
 
 ## 4. Cloud Shell — calibrate C1–C4
 
+If the image is already `READY`, run:
+
+```bash
+grid48 calibrate --execute
+```
+
+If you just prepared a running builder and still need to create the image,
+run:
+
 ```bash
 grid48 calibrate --builder "$BUILDER" --execute
 ```
 
-The launcher builds the image and asks for the OpenAI trial key with
-hidden input. The key and `gpt-6-luna` must work for both Codex CLI and the
+The launcher verifies the image and asks for the OpenAI trial key with
+hidden input. If `$OUT/calibration.json` already exists, review the
+existing calibration exports. The key and `gpt-6-luna` must work for both Codex CLI and the
 tool-free Responses API call. Expect four verified exports under
 `$OUT/calibration` and a `Calibration complete` message.
 
@@ -153,9 +176,55 @@ grid48 collect --calibration-reviewed --execute
 ```
 
 The launcher checks the four calibration exports against the recorded image
-and matrix. It creates a fresh VM per row. If collection stops, address the
-failure and rerun the same command. Verified rows are reused. Check failed
-attempt metadata for VMs that may still be running.
+and matrix. It creates a fresh VM per row.
+
+### Recover after a Cloud Shell timeout
+
+Reconnect to Cloud Shell. If `grid48` is undefined, repeat Step 2 with the
+same archive and checksum to restore the original campaign directory.
+Check for an active collector:
+
+```bash
+pgrep -af 'run_gcp_(experiment|canary_suite)\.py'
+```
+
+Check how many measured rows have verified exports:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${operator_dir:?Repeat Step 2}/scripts" \
+  python3 - "${OUT:?Repeat Step 2}" <<'PY'
+from pathlib import Path
+import sys
+import tarfile
+
+from run_gcp_canary_suite import verify_export
+from run_session_matrix import read_matrix, trial_id
+
+campaign = Path(sys.argv[1])
+planned = read_matrix(campaign / "codex-grid48-codex.csv")
+complete = 0
+for row in planned:
+    name = trial_id(row)
+    for archive in (campaign / "measured" / name).glob("*/evidence.tar.gz"):
+        try:
+            verify_export(archive, name)
+        except EOFError:
+            print(f"Truncated export: {archive}")
+        except (KeyError, OSError, ValueError, tarfile.TarError):
+            continue
+        else:
+            complete += 1
+            break
+print(f"{complete}/{len(planned)} measured rows verified")
+PY
+```
+
+At `48/48`, proceed to Step 6. If a collector is still running, let it
+continue. Otherwise, rerun the collection command in Step 5. It reuses
+verified rows from the same campaign. If an older bundle stops with
+`EOFError` on a truncated export and no collector is running, rename just
+that failed `evidence.tar.gz` to `evidence.tar.gz.interrupted` and retry.
+Keep the failed attempt's metadata and check whether its VM is still running.
 
 ## 6. Cloud Shell and Mac — download and report
 

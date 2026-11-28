@@ -17,6 +17,7 @@ import uuid
 
 from run_gcp_canary_suite import verify_export
 from grid_protocol import GRID_CALIBRATIONS, GRID_CONDITIONS, GRID_PLAN, GRID_SCRIPTS, grid_trial
+import native_authorized_protocol as native
 from provider_auth import prompt_provider_keys
 from run_session_matrix import read_matrix
 
@@ -33,7 +34,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bundle", required=True, type=Path)
     parser.add_argument("--sha256", required=True, help="trusted checksum for the uploaded bundle")
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--plan", choices=("focused24", "factorial48", "wording24", GRID_PLAN), default="focused24")
+    parser.add_argument(
+        "--plan", choices=("focused24", "factorial48", "wording24", GRID_PLAN, native.PLAN), default="focused24",
+    )
     parser.add_argument("--codex-only", action="store_true",
                         help="use a separate matrix and receipt for Codex-only collection")
     parser.add_argument("--builder", help="existing prepared Ubuntu builder with the selected CLIs installed")
@@ -47,9 +50,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--calibration-reviewed", action="store_true",
                         help="confirm the exported calibration traces and selected controls were reviewed")
     args = parser.parse_args()
-    if args.plan == GRID_PLAN:
+    if args.plan in {GRID_PLAN, native.PLAN}:
         if args.agent or args.use_vm_auth:
-            parser.error("the Codex grid calibrates all four conditions and requires a runtime OpenAI key")
+            parser.error("the selected plan calibrates its full Codex scope and requires a runtime OpenAI key")
         args.codex_only = True
     if not args.codex_only and not args.claude_model:
         parser.error("--claude-model is required unless --codex-only is selected")
@@ -67,7 +70,8 @@ def verify_bundle(path: Path, checksum: str) -> None:
         # The Cloud Shell entry point can be updated independently of the VM image.
         for script in ("build_gcp_canary_image.sh", "provider_auth.py",
                        "run_gcp_canary_suite.py", "generate_session_matrix.py",
-                       "run_session_matrix.py", "run_session_trial.py", "grid_protocol.py"):
+                       "run_session_matrix.py", "run_session_trial.py", "grid_protocol.py",
+                       "native_authorized_protocol.py"):
             content = archive.extractfile(f"scripts/{script}")
             if content is None or content.read() != (SCRIPTS / script).read_bytes():
                 raise ValueError(f"run this workflow from the matching bundle: {script}")
@@ -92,7 +96,7 @@ def image_identity(args: argparse.Namespace) -> str:
 def check_calibration(path: Path, name: str) -> None:
     verify_export(path, name)
     with tarfile.open(path, "r:gz") as archive:
-        for turn in range(2 if grid_trial(name) else 4):
+        for turn in range(2 if grid_trial(name) or native.is_trial(name) else 4):
             status_file = f"{name}/turn_{turn:02}_status.json"
             with archive.extractfile(status_file) as source:
                 if json.load(source).get("completed_with_answer") is not True:
@@ -109,18 +113,25 @@ def verified_attempt(
     expected.update(
         trial_id=name, image_project=configuration["project"], matrix_sha256=matrix_sha256
     )
+    if native.is_trial(name):
+        expected.update(
+            campaign_id=configuration["campaign_id"], image_id=configuration["image_id"], protocol=native.PROTOCOL,
+        )
     for archive in sorted((calibration / name).glob("*/evidence.tar.gz")):
         metadata = json.loads(archive.with_name("attempt.json").read_text(encoding="utf-8"))
         if any(metadata.get(field) != value for field, value in expected.items()):
             raise ValueError(f"calibration attempt configuration differs: {archive.parent}")
         try:
             check_calibration(archive, name)
-        except (KeyError, OSError, ValueError, tarfile.TarError):
+        except (EOFError, KeyError, OSError, ValueError, tarfile.TarError):
             continue  # Keep the failed attempt and look for another verified export.
         with tarfile.open(archive, "r:gz") as bundle:
             with bundle.extractfile(f"{name}/manifest.json") as manifest:
-                if json.load(manifest).get("provider_auth") != configuration["provider_auth"]:
+                data = json.load(manifest)
+                if data.get("provider_auth") != configuration["provider_auth"]:
                     raise ValueError(f"calibration authentication mode differs: {archive.parent}")
+                if native.is_trial(name) and data.get("model_arg") != configuration["codex_model"]:
+                    raise ValueError(f"calibration model differs: {archive.parent}")
         return archive
     return None
 
@@ -137,6 +148,8 @@ def main() -> None:
         calibration_ids = tuple(name.replace("_pressure_", "_plain_") for name in calibration_ids)
     if args.plan == GRID_PLAN:
         calibration_ids = GRID_CALIBRATIONS
+    elif args.plan == native.PLAN:
+        calibration_ids = native.CALIBRATIONS
     elif args.codex_only:
         calibration_ids = calibration_ids[:1]
     selected = tuple(name for name in calibration_ids if not args.agent or name.startswith(args.agent + "_"))
@@ -149,6 +162,8 @@ def main() -> None:
             print("48 measured trials. Six per group:")
             for condition in GRID_CONDITIONS:
                 print(f"  {condition}: role-neutral=6, role-urgent=6")
+        elif args.plan == native.PLAN:
+            print(f"12 measured trials. Six authorized tasks in each of C2 and C3. Seed={native.SEED}.")
         if args.phase == "calibrate":
             print(f"Calibration rows: {', '.join(selected)}")
         return
@@ -163,18 +178,23 @@ def main() -> None:
         execute(args, calibration_ids, selected, scope)
 
 
-def check_grid_matrix(matrix: Path) -> None:
+def check_fixed_matrix(matrix: Path, plan: str) -> None:
     counts = Counter((row["agent"], row["condition"], row["script"], row["replicate"]) for row in read_matrix(matrix))
+    conditions, scripts, replicates = (
+        (native.CONDITIONS, (native.SCRIPT,), native.REPLICATES)
+        if plan == native.PLAN else (GRID_CONDITIONS, GRID_SCRIPTS, 6)
+    )
     expected = {
         ("codex", condition, wording, str(replicate)): 1
-        for condition in GRID_CONDITIONS for wording in GRID_SCRIPTS for replicate in range(1, 7)
+        for condition in conditions for wording in scripts for replicate in range(1, replicates + 1)
     }
     if counts != expected:
-        raise ValueError("grid matrix must contain all 48 prescribed Codex trials exactly once")
+        raise ValueError(f"{plan} matrix must contain all {len(expected)} prescribed Codex trials exactly once")
 
 
 def execute(args: argparse.Namespace, calibration_ids: tuple, selected: tuple, scope: str) -> None:
-    is_grid = args.plan == GRID_PLAN
+    is_authorized = args.plan == native.PLAN
+    verified_campaign = args.plan == GRID_PLAN or is_authorized
     receipt = args.output / "calibration.json"
     measured = args.output / "measured"
     if args.phase == "calibrate" and receipt.exists():
@@ -182,7 +202,7 @@ def execute(args: argparse.Namespace, calibration_ids: tuple, selected: tuple, s
     if args.phase == "collect":
         if not args.calibration_reviewed or not receipt.is_file():
             raise ValueError("collect requires a successful calibration and --calibration-reviewed")
-        if measured.exists() and not is_grid:
+        if measured.exists() and not verified_campaign:
             raise ValueError("measured output already exists; use the trial launcher for outstanding rows")
 
     if args.builder:
@@ -200,6 +220,8 @@ def execute(args: argparse.Namespace, calibration_ids: tuple, selected: tuple, s
     }
     if args.codex_only:
         configuration["agent_scope"] = scope
+    if is_authorized:
+        configuration.update(campaign_id=args.output.resolve().name, protocol=native.PROTOCOL, seed=str(native.SEED))
     matrix_suffix = "-codex" if args.codex_only else ""
     matrix = args.output / f"{args.plan}{matrix_suffix}.csv"
     launcher = [
@@ -210,6 +232,8 @@ def execute(args: argparse.Namespace, calibration_ids: tuple, selected: tuple, s
     ]
     if not args.use_vm_auth:
         launcher.append("--provider-keys-stdin")
+    if is_authorized:
+        launcher.extend(["--campaign-id", configuration["campaign_id"], "--image-id", configuration["image_id"]])
     if args.phase == "calibrate":
         calibration_root = args.output / "calibration"
         if args.resume_calibration:
@@ -218,11 +242,11 @@ def execute(args: argparse.Namespace, calibration_ids: tuple, selected: tuple, s
                 raise ValueError("--resume-calibration must be an existing run directory under --output/calibration")
         else:
             run(sys.executable, str(SCRIPTS / "generate_session_matrix.py"),
-                "--plan", args.plan, "--seed", "117", "--output", str(matrix),
+                "--plan", args.plan, "--seed", str(native.SEED if is_authorized else 117), "--output", str(matrix),
                 *(("--codex-only",) if args.codex_only else ()))
             calibration = calibration_root / uuid.uuid4().hex
-        if is_grid:
-            check_grid_matrix(matrix)
+        if verified_campaign:
+            check_fixed_matrix(matrix, args.plan)
             print(f"Calibration run directory: {calibration}", flush=True)
         matrix_sha256 = hashlib.sha256(matrix.read_bytes()).hexdigest()
         verified = {}
@@ -262,22 +286,22 @@ def execute(args: argparse.Namespace, calibration_ids: tuple, selected: tuple, s
             raise ValueError("image or experiment configuration differs from calibration")
         if record["matrix_sha256"] != hashlib.sha256(matrix.read_bytes()).hexdigest():
             raise ValueError("matrix changed after calibration")
-        if is_grid:
-            check_grid_matrix(matrix)
+        if verified_campaign:
+            check_fixed_matrix(matrix, args.plan)
             calibration = Path(record["calibration_dir"]).resolve()
             if (
                 calibration.parent != (args.output / "calibration").resolve()
                 or set(record["exports"]) != set(calibration_ids)
             ):
-                raise ValueError("grid collection requires verified calibration for C1 through C4")
+                raise ValueError("collection requires verified calibration for every configured condition")
             for name in calibration_ids:
                 archive = verified_attempt(calibration, name, configuration, record["matrix_sha256"])
                 if archive is None or str(archive.resolve()) != record["exports"][name]:
-                    raise ValueError(f"grid calibration is missing or changed: {name}")
+                    raise ValueError(f"calibration is missing or changed: {name}")
         agents = tuple(dict.fromkeys(name.partition("_")[0] for name in calibration_ids))
         keys = {} if args.use_vm_auth else prompt_provider_keys(agents)
-        measured.mkdir(exist_ok=is_grid)
-        if is_grid:
+        measured.mkdir(exist_ok=verified_campaign)
+        if verified_campaign:
             launcher.append("--skip-completed")
         run(*launcher, "--output", str(measured), input=json.dumps(keys) if keys else None, text=True)
 

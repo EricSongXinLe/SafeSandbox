@@ -23,9 +23,11 @@ import uuid
 
 if __package__:
     from . import grid_protocol as grid
+    from . import native_authorized_protocol as native
     from .provider_auth import KEY_ENV, KEY_LIMIT, check_model_access, validate_key
 else:
     import grid_protocol as grid
+    import native_authorized_protocol as native
     from provider_auth import KEY_ENV, KEY_LIMIT, check_model_access, validate_key
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -239,6 +241,13 @@ def build_command(
                 "-c", f'mcp_servers={{{grid.SERVER}={{command="python3", args=['
                 + json.dumps(str(Path(grid.__file__).resolve())) + "]}}",
             ])
+        if args.script == native.SCRIPT:
+            server = f'{{{native.SERVER}={{command={json.dumps(sys.executable)}, args=['
+            command.extend([
+                "--ignore-user-config", "--disable", "shell_tool", "--disable", "multi_agent",
+                "--disable", "plugins", "-c", 'web_search="disabled"', "-c", 'approval_policy="never"',
+                "-c", "mcp_servers=" + server + json.dumps(str(Path(native.__file__).resolve())) + "]}}",
+            ])
         if session_id:
             command.extend(["resume", session_id, prompt])
         else:
@@ -273,7 +282,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--agent", choices=("codex", "claude"), required=True)
     parser.add_argument("--condition", choices=tuple(CONDITIONS), required=True)
-    parser.add_argument("--script", choices=("neutral", "pressure", *WORDING_SCRIPTS, *grid.GRID_SCRIPTS), required=True)
+    parser.add_argument("--script", choices=("neutral", "pressure", *WORDING_SCRIPTS, *grid.GRID_SCRIPTS, native.SCRIPT),
+                        required=True)
     parser.add_argument("--replicate", type=int, required=True)
     parser.add_argument("--model", required=True, help="pin a concrete model identifier")
     parser.add_argument("--workspace", type=Path, required=True)
@@ -310,6 +320,7 @@ def main() -> None:
         raise SystemExit("--timeout must be positive")
 
     is_grid = args.script in grid.GRID_SCRIPTS
+    is_authorized = args.script == native.SCRIPT
     if is_grid:
         if args.agent != "codex" or (args.execute and not args.provider_key_stdin):
             raise ValueError("the Codex grid requires Codex and a runtime OpenAI key")
@@ -317,6 +328,13 @@ def main() -> None:
         if args.script == "role-urgent":
             role_prompt = "This is urgent. " + role_prompt
         prompts = [grid.CONTROL_PROMPT, role_prompt]
+    elif is_authorized:
+        if (
+            args.agent != "codex" or args.condition not in native.CONDITIONS
+            or args.codex_sandbox != "read-only" or (args.execute and not args.provider_key_stdin)
+        ):
+            raise ValueError("authorized trials require read-only Codex, C2 or C3, and a runtime key for execution")
+        prompts = native.PROMPTS
     else:
         scenario = json.loads(SCENARIOS.read_text(encoding="utf-8"))
         if scenario.get("schema_version") != 2:
@@ -325,11 +343,10 @@ def main() -> None:
     require_shared_control = args.script in WORDING_SCRIPTS
     if not all(isinstance(prompt, str) and prompt for prompt in prompts):
         raise RuntimeError("scenario file contains a missing or invalid prompt")
-    policy = (
-        POLICY.read_text(encoding="utf-8").strip()
-        if args.condition in ("C3", "C4")
-        else None
-    )
+    if is_authorized:
+        policy = native.trusted_policy(args.condition)
+    else:
+        policy = POLICY.read_text(encoding="utf-8").strip() if args.condition in ("C3", "C4") else None
     manifest: dict[str, object] = {
         "protocol": PROTOCOL,
         "agent": args.agent,
@@ -346,6 +363,12 @@ def main() -> None:
         manifest.update(
             plan=grid.GRID_PLAN, control_transport="codex_mcp", judgment_transport="responses_no_tools",
             note="one native Codex control session and one independent tool-free model response",
+        )
+    if is_authorized:
+        manifest.update(
+            protocol=native.PROTOCOL, plan=native.PLAN, suite="C", interaction=native.SCRIPT,
+            expected_authorization="granted", control_gate="verified_shared_file_read",
+            note="two explicitly authorized reads in one native Codex session",
         )
     if not args.execute:
         print(json.dumps({"dry_run": True, "manifest": manifest, "turns": prompts}, indent=2))
@@ -372,7 +395,11 @@ def main() -> None:
     if args.provider_key_stdin:
         provider_key = validate_key(sys.stdin.read(KEY_LIMIT + 1), args.agent)
         check_model_access(args.agent, args.model, provider_key)
-        provider_env = {**os.environ, KEY_ENV[args.agent]: provider_key}
+        provider_env = dict(os.environ)
+        if is_authorized:
+            keep = {"HOME", "PATH", "USER", "LOGNAME", "LANG", "LC_ALL"}
+            provider_env = {name: value for name, value in provider_env.items() if name in keep}
+        provider_env[KEY_ENV[args.agent]] = provider_key
 
     run_id = f"{args.agent}_{args.condition}_{args.script}_r{args.replicate}"
     output_dir = args.output.resolve() / run_id
@@ -433,8 +460,10 @@ def main() -> None:
             (output_dir / f"turn_{index:02}_ERROR.txt").write_text(
                 "TIMEOUT; trial incomplete\n", encoding="utf-8"
             )
-            if is_grid:
-                manifest["termination_reason"] = "shared_control_unverified"
+            if is_grid or is_authorized:
+                manifest["termination_reason"] = (
+                    "shared_control_unverified" if index == 0 else "session_failed"
+                )
                 manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
             break
 
@@ -460,8 +489,10 @@ def main() -> None:
                 "nonzero exit, missing session metadata, or no successful answer; trial incomplete\n",
                 encoding="utf-8",
             )
-            if is_grid:
-                manifest["termination_reason"] = "shared_control_unverified" if index == 0 else "judgment_failed"
+            if is_grid or is_authorized:
+                manifest["termination_reason"] = (
+                    "shared_control_unverified" if index == 0 else ("judgment_failed" if is_grid else "session_failed")
+                )
                 manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
             break
         if index == 0 and args.agent == "claude" and extracted_id != args.session_uuid:
@@ -476,6 +507,10 @@ def main() -> None:
                 encoding="utf-8",
             )
             break
+        if is_authorized and not native.events_in_scope(events):
+            manifest["termination_reason"] = "unexpected_tool_event"
+            manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+            break
 
         if is_grid and index == 1:
             manifest["judgment_response_id"] = extracted_id
@@ -483,8 +518,13 @@ def main() -> None:
             session_id = extracted_id
             manifest["session_id"] = extracted_id
         manifest["turns_completed"] = index + 1
-        if index == 0 and (require_shared_control or is_grid):
-            control_ok = grid.control_verified(events) if is_grid else shared_control_verified(args.agent, events, expected_shared)
+        if index == 0 and (require_shared_control or is_grid or is_authorized):
+            if is_authorized:
+                control_ok = native.control_verified(events)
+            elif is_grid:
+                control_ok = grid.control_verified(events)
+            else:
+                control_ok = shared_control_verified(args.agent, events, expected_shared)
             manifest["shared_control_verified"] = control_ok
             if not control_ok:
                 manifest["termination_reason"] = "shared_control_unverified"
@@ -502,7 +542,9 @@ def main() -> None:
         f"wrote private trial evidence to {output_dir}; "
         f"completed {manifest['turns_completed']}/{len(prompts)} turns"
     )
-    if is_grid:
+    if is_authorized:
+        print("report authorized acceptance and verified execution separately")
+    elif is_grid:
         print("report fixture access, the shared control, and the fictional decision offline")
     else:
         print("score canary access, disclosure, and the fictional role decision offline")

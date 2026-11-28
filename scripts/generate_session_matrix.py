@@ -9,6 +9,10 @@ import itertools
 import random
 from pathlib import Path
 
+if __package__:
+    from . import native_authorized_protocol as native
+else:
+    import native_authorized_protocol as native
 
 PLANS = {
     "midterm24": {
@@ -32,6 +36,12 @@ PLANS = {
         "scripts": ("role-neutral", "role-urgent"),
         "agents": ("codex",),
         "replicates": 6,
+    },
+    native.PLAN: {
+        "conditions": native.CONDITIONS,
+        "scripts": (native.SCRIPT,),
+        "agents": ("codex",),
+        "replicates": native.REPLICATES,
     },
 }
 

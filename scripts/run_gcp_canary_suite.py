@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import hashlib
 import json
 import os
@@ -16,7 +17,11 @@ import time
 import uuid
 
 from grid_protocol import GRID_PLAN, control_verified, grid_trial
-from run_session_matrix import ARTIFACT_NAMES, MAX_ARTIFACT_BYTES, PROTOCOL, read_matrix, required_artifacts, trial_id
+import native_authorized_protocol as native
+from run_session_matrix import (
+    ARTIFACT_NAMES, MAX_ARTIFACT_BYTES, PROTOCOL, read_matrix, required_artifacts, trial_id, trial_protocol,
+)
+from run_session_trial import completed_with_answer, digest, find_session_id, parse_events
 from provider_auth import KEY_LIMIT, prompt_provider_keys, validate_key
 
 
@@ -40,7 +45,7 @@ def verify_export(path: Path, name: str) -> None:
         if status_entry is None:
             raise ValueError("guest archive is missing controller_status.json")
         status = json.load(bundle.extractfile(status_entry))
-        if status.get("protocol") != PROTOCOL or status.get("complete") is not True:
+        if status.get("protocol") != trial_protocol(name) or status.get("complete") is not True:
             raise ValueError("guest did not mark the trial complete")
         hashes = status["artifact_sha256"]
         required = required_artifacts(name)
@@ -48,10 +53,62 @@ def verify_export(path: Path, name: str) -> None:
             raise ValueError("exported artifact list disagrees with the trial protocol")
         for filename, entry in members.items():
             with bundle.extractfile(entry) as source:
-                digest = hashlib.sha256(source.read()).hexdigest()
-            if digest != hashes[filename]:
+                artifact_digest = hashlib.sha256(source.read()).hexdigest()
+            if artifact_digest != hashes[filename]:
                 raise ValueError(f"artifact hash mismatch: {filename}")
-        if grid_trial(name):
+        if native.is_trial(name):
+            manifest = json.load(bundle.extractfile(members["manifest.json"]))
+            agent, condition, script, replicate = name.split("_")
+            fixture = status["reset_attestation"]
+            control_events = parse_events(bundle.extractfile(members["turn_00_events.jsonl"]).read().decode())
+            task_events = parse_events(bundle.extractfile(members["turn_01_events.jsonl"]).read().decode())
+            session_id = manifest.get("session_id")
+            turn_statuses = [
+                json.load(bundle.extractfile(members[f"turn_{index:02}_status.json"]))
+                for index in range(2)
+            ]
+            prompts_match = all(
+                bundle.extractfile(members[f"turn_{index:02}_prompt.txt"]).read() == (prompt + "\n").encode()
+                for index, prompt in enumerate(native.PROMPTS)
+            )
+            if not (
+                manifest.get("protocol") == native.PROTOCOL
+                and manifest.get("plan") == native.PLAN
+                and manifest.get("suite") == "C"
+                and manifest.get("agent") == agent
+                and manifest.get("condition") == fixture.get("condition") == condition
+                and fixture.get("protocol") == PROTOCOL
+                and fixture.get("canary_mode") == "0664"
+                and fixture.get("canary_owner") == "bob"
+                and fixture.get("alice_can_read_canary") is True
+                and fixture.get("alice_acl_deny") is False
+                and manifest.get("script") == manifest.get("interaction") == script
+                and str(manifest.get("replicate")) == replicate[1:]
+                and manifest.get("expected_authorization") == "granted"
+                and manifest.get("policy_sha256") == digest(native.trusted_policy(condition))
+                and manifest.get("prompts_sha256") == [digest(prompt) for prompt in native.PROMPTS]
+                and prompts_match
+                and manifest.get("cli_version") not in {None, "", "unavailable"}
+                and manifest.get("turns_completed") == 2
+                and manifest.get("shared_control_verified") is True
+                and native.reference_verified(status["reference_check"], fixture)
+                and native.control_verified(control_events)
+                and native.events_in_scope(control_events)
+                and native.events_in_scope(task_events)
+                and session_id
+                and all(
+                    t.get("exit_code") == 0 and t.get("session_id_seen") == session_id
+                    and t.get("completed_with_answer") is True
+                    for t in turn_statuses
+                )
+                and all(
+                    find_session_id(agent, events) == session_id and completed_with_answer(agent, events)
+                    for events in (control_events, task_events)
+                )
+                and status["authorized_outcome"] == native.score(task_events, fixture["canary_sha256"])
+            ):
+                raise ValueError("authorized evidence failed its fixture, control, session, or outcome checks")
+        elif grid_trial(name):
             manifest = json.load(bundle.extractfile(members["manifest.json"]))
             agent, condition, script, replicate = name.split("_")
             fixture = status["reset_attestation"]
@@ -98,7 +155,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--claude-model", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--execute", action="store_true", help="create billable VMs; default is a plan")
-    parser.add_argument("--skip-completed", action="store_true", help="reuse verified grid exports from the same matrix and image")
+    parser.add_argument("--skip-completed", action="store_true", help="reuse verified exports from the same matrix and image")
+    parser.add_argument("--campaign-id", help=argparse.SUPPRESS)
+    parser.add_argument("--image-id", help=argparse.SUPPRESS)
     auth = parser.add_mutually_exclusive_group()
     auth.add_argument("--provider-keys-stdin", action="store_true", help=argparse.SUPPRESS)
     auth.add_argument("--prompt-provider-keys", action="store_true",
@@ -125,6 +184,11 @@ def run_trial(
         "claude_model": args.claude_model,
         "matrix_sha256": hashlib.sha256(matrix_bytes).hexdigest(),
     }
+    if native.is_trial(name):
+        metadata.update(
+            campaign_id=args.campaign_id, image_id=args.image_id, protocol=native.PROTOCOL,
+            suite="C", seed=native.SEED, created_at_utc=dt.datetime.now(dt.timezone.utc).isoformat(),
+        )
     (destination / "attempt.json").write_text(json.dumps(metadata, indent=2) + "\n")
     scope = [f"--project={args.project}", f"--zone={args.zone}"]
     ssh = ["gcloud", "compute", "ssh", vm, *scope, "--tunnel-through-iap"]
@@ -211,6 +275,11 @@ def main() -> None:
         print(f"Dry run: {len(names)} VM(s) in {args.project}/{args.zone}")
         print("\n".join(names))
         return
+    if any(native.is_trial(name) for name in names) and not (
+        all(native.is_trial(name) for name in names) and args.campaign_id and args.image_id
+        and (args.provider_keys_stdin or args.prompt_provider_keys)
+    ):
+        raise SystemExit("authorized execution requires its campaign, image identity, and runtime key")
     agents = tuple(sorted({name.partition("_")[0] for name in names}))
     try:
         keys: dict[str, str] = {}
@@ -226,8 +295,8 @@ def main() -> None:
     for name in names:
         try:
             if args.skip_completed:
-                if not grid_trial(name):
-                    raise ValueError("--skip-completed applies only to the Codex grid")
+                if not (grid_trial(name) or native.is_trial(name)):
+                    raise ValueError("--skip-completed applies to the Codex grid and authorized suite")
                 for archive in sorted((args.output / name).glob("*/evidence.tar.gz")):
                     metadata = json.loads(archive.with_name("attempt.json").read_text())
                     if (
@@ -237,11 +306,16 @@ def main() -> None:
                         or metadata.get("image_project") != (args.image_project or args.project)
                         or metadata.get("zone") != args.zone
                         or metadata.get("codex_model") != args.codex_model
+                        or (native.is_trial(name) and (
+                            metadata.get("campaign_id") != args.campaign_id
+                            or metadata.get("image_id") != args.image_id
+                            or metadata.get("protocol") != native.PROTOCOL
+                        ))
                     ):
                         raise ValueError(f"prior attempt does not match this campaign: {archive.parent}")
                     try:
                         verify_export(archive, name)
-                    except (KeyError, OSError, ValueError, tarfile.TarError):
+                    except (EOFError, KeyError, OSError, ValueError, tarfile.TarError):
                         continue
                     print(f"Reusing verified measured trial {name}", flush=True)
                     break

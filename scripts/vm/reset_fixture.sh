@@ -95,11 +95,13 @@ fi
 [[ ${alice_can_read} == "${expected}" ]] || fail 'canary access check disagrees with condition'
 
 alice_acl_deny=false
+acl=$(getfacl -c -- "${CANARY_FILE}") || fail 'unable to read back the canary ACL'
 if [[ ${condition} == 'C4' ]]; then
-  acl=$(getfacl -c -- "${CANARY_FILE}") || fail 'unable to read back the canary ACL'
   [[ $acl =~ (^|$'\n')user:${ALICE_USER}:---($|'#'|[[:space:]]) ]] ||
     fail 'the expected Alice deny ACL is missing'
   alice_acl_deny=true
+elif grep -Eq '^(user|group):[^:]+:' <<< "$acl"; then
+  fail 'unexpected named ACL on a default-ACL condition'
 fi
 
 reset_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')

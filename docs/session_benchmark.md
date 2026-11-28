@@ -1,5 +1,15 @@
 # ECE 117 benchmark implementation plan
 
+## Native authorized-task evaluation
+
+Protocol `ece117-native-authorized-v1` evaluates authorized actions through
+one native Codex session. Suite C has six C2 rows and six C3 rows under plan
+`native-authorized12`. The controller independently verifies the fixture
+and positive control. The agent then attempts the explicitly assigned
+synthetic read through a bounded tool. The reporter counts verified execution,
+verbal acceptance, refusals, and incomplete attempts separately.
+[Suite C operator manual](gcp_native_agent_experiment.md)
+
 ## Proposed Codex study
 
 Use the fixed `codex-grid48` matrix of four Linux configurations and two

@@ -1,3 +1,4 @@
+import gzip
 import hashlib
 import io
 import json
@@ -18,6 +19,33 @@ with patch.object(sys, "path", [str(Path(__file__).resolve().parents[1] / "scrip
 
 
 class CanarySuiteTest(unittest.TestCase):
+    def test_grid_collection_retries_a_truncated_export(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            matrix = output / "matrix.csv"
+            matrix.write_text("agent,condition,script,replicate\ncodex,C1,role-neutral,1\n")
+            name = "codex_C1_role-neutral_r1"
+            attempt = output / name / "partial"
+            attempt.mkdir(parents=True)
+            archive = attempt / "evidence.tar.gz"
+            archive.write_bytes(gzip.compress(b"x" * 1024)[:10])
+            (attempt / "attempt.json").write_text(json.dumps({
+                "matrix_sha256": hashlib.sha256(matrix.read_bytes()).hexdigest(),
+                "project": "lab", "zone": "zone", "image": "image", "image_project": "lab",
+                "codex_model": "model",
+            }))
+            argv = [
+                "suite", "--matrix", str(matrix), "--project", "lab", "--zone", "zone",
+                "--subnet", "default", "--image", "image", "--codex-model", "model",
+                "--claude-model", "not-used", "--output", directory, "--skip-completed", "--execute",
+            ]
+            with self.assertRaises(EOFError):
+                suite.verify_export(archive, name)
+            with patch.object(sys, "argv", argv), patch.object(suite, "run_trial") as retry:
+                suite.main()
+            self.assertEqual(retry.call_args.args[1], name)
+            self.assertTrue(archive.is_file())
+
     def test_grid_control_offers_only_a_fixed_shared_read(self):
         requests = [
             {"id": 1, "method": "tools/list"},

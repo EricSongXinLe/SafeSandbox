@@ -20,9 +20,13 @@ import subprocess
 import sys
 
 if __package__:
+    from . import native_authorized_protocol as native
     from .grid_protocol import GRID_PLAN, GRID_SCRIPTS, grid_trial
+    from .run_session_trial import parse_events
 else:
+    import native_authorized_protocol as native
     from grid_protocol import GRID_PLAN, GRID_SCRIPTS, grid_trial
+    from run_session_trial import parse_events
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SESSION_RUNNER = PROJECT_ROOT / "scripts" / "run_session_trial.py"
@@ -31,7 +35,7 @@ LAB_MARKER = Path("/etc/ece117-lab-only")
 EXPECTED_MARKER = "ECE117-INERT-CANARY-V2"
 ALLOWED_CONDITIONS = {"C1", "C2", "C3", "C4"}
 PROTOCOL = "inert-canary-v2"
-ALLOWED_SCRIPTS = {"neutral", "pressure", "plain", "urgency", *GRID_SCRIPTS}
+ALLOWED_SCRIPTS = {"neutral", "pressure", "plain", "urgency", *GRID_SCRIPTS, native.SCRIPT}
 ALLOWED_AGENTS = {"codex", "claude"}
 ARTIFACT_NAMES = {"manifest.json"} | {
     f"turn_{index:02}_{suffix}"
@@ -90,6 +94,8 @@ def read_matrix(path: Path) -> list[dict[str, str]]:
             raise RuntimeError(f"line {line_number}: unsupported script {script!r}")
         if script in GRID_SCRIPTS and agent != "codex":
             raise RuntimeError(f"line {line_number}: the Codex grid requires Codex")
+        if script == native.SCRIPT and (agent != "codex" or condition not in native.CONDITIONS):
+            raise RuntimeError(f"line {line_number}: authorized trials require Codex in C2 or C3")
         if replicate < 1:
             raise RuntimeError(f"line {line_number}: replicate must be at least 1")
         key = (agent, condition, script, replicate)
@@ -104,11 +110,16 @@ def trial_id(row: dict[str, str]) -> str:
     return f"{row['agent']}_{row['condition']}_{row['script']}_r{row['replicate']}"
 
 
+def trial_protocol(name: str) -> str:
+    return native.PROTOCOL if native.is_trial(name) else PROTOCOL
+
+
 def required_artifacts(name: str) -> set[str]:
+    two_turns = grid_trial(name) or native.is_trial(name)
     return {
         filename for filename in ARTIFACT_NAMES
         if not filename.endswith("_ERROR.txt")
-        and (not grid_trial(name) or not filename.startswith(("turn_02_", "turn_03_")))
+        and (not two_turns or not filename.startswith(("turn_02_", "turn_03_")))
     }
 
 
@@ -131,7 +142,7 @@ def is_completed(destination: Path) -> bool:
         return False
     return (
         isinstance(status, dict)
-        and status.get("protocol") == PROTOCOL
+        and status.get("protocol") == trial_protocol(destination.name)
         and status.get("complete") is True
     )
 
@@ -286,6 +297,9 @@ def main() -> None:
 
     for row in runnable:
         name = trial_id(row)
+        is_authorized = native.is_trial(name)
+        is_grid = grid_trial(name)
+        protocol = trial_protocol(name)
         staged = args.staging_dir / name
         destination = args.archive_dir / name
         if os.path.lexists(staged):
@@ -301,9 +315,9 @@ def main() -> None:
             check=False,
         )
         if reset.returncode != 0:
-            if grid_trial(name):
+            if is_grid or is_authorized:
                 (destination / "controller_status.json").write_text(json.dumps({
-                    "protocol": PROTOCOL, "complete": False,
+                    "protocol": protocol, "complete": False,
                     "failure_stage": "fixture", "artifact_sha256": {},
                     "runner_stderr": reset.stderr,
                 }, indent=2) + "\n", encoding="utf-8")
@@ -318,6 +332,25 @@ def main() -> None:
             raise RuntimeError(f"fixture attestation mismatch for {name}")
 
         started_at = dt.datetime.now(dt.timezone.utc).isoformat()
+        reference = None
+        if is_authorized:
+            checked = run_as_alice(args.alice_user, [
+                "python3", str(SESSION_RUNNER.with_name("native_authorized_protocol.py")), "--reference-check",
+            ])
+            if checked.returncode == 0:
+                try:
+                    reference = json.loads(checked.stdout)
+                except ValueError:
+                    pass
+            if not isinstance(reference, dict) or not native.reference_verified(reference, reset_attestation):
+                (destination / "controller_status.json").write_text(json.dumps({
+                    "protocol": protocol, "complete": False,
+                    "controller_started_at_utc": started_at,
+                    "controller_finished_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+                    "failure_stage": "reference", "artifact_sha256": {},
+                    "reset_attestation": reset_attestation,
+                }, indent=2) + "\n", encoding="utf-8")
+                raise RuntimeError(f"authorized fixture reference check failed for {name}")
         command = [
             "python3",
             str(SESSION_RUNNER),
@@ -345,20 +378,20 @@ def main() -> None:
         artifact_hashes: dict[str, str] = {}
         archive_error = None
         complete = False
+        authorized_outcome = None
         try:
             copy_trial_artifacts(staged, destination, alice_uid, artifact_hashes)
             manifest = json.loads((destination / "manifest.json").read_text(encoding="utf-8"))
-            is_grid = grid_trial(name)
             complete = (
                 result.returncode == 0
                 and isinstance(manifest, dict)
-                and manifest.get("protocol") == PROTOCOL
+                and manifest.get("protocol") == protocol
                 and manifest.get("agent") == row["agent"]
                 and manifest.get("condition") == row["condition"]
                 and manifest.get("script") == row["script"]
                 and manifest.get("replicate") == int(row["replicate"])
                 and manifest.get("model_arg") == models[row["agent"]]
-                and manifest.get("turns_completed") == (2 if is_grid else 4)
+                and manifest.get("turns_completed") == (2 if is_grid or is_authorized else 4)
                 and (row["script"] not in ("plain", "urgency") or manifest.get("shared_control_verified") is True)
                 and (not is_grid or (
                     manifest.get("plan") == GRID_PLAN
@@ -366,12 +399,21 @@ def main() -> None:
                     and manifest.get("judgment_response_id")
                     and manifest["judgment_response_id"] != manifest.get("session_id")
                 ))
+                and (not is_authorized or (
+                    manifest.get("plan") == native.PLAN
+                    and manifest.get("expected_authorization") == "granted"
+                    and manifest.get("shared_control_verified") is True
+                ))
                 and artifact_hashes.keys() == required_artifacts(name)
             )
+            if complete and is_authorized:
+                events = parse_events((destination / "turn_01_events.jsonl").read_text(encoding="utf-8"))
+                authorized_outcome = native.score(events, reset_attestation["canary_sha256"])
         except (OSError, ValueError, RuntimeError) as error:
             archive_error = str(error)
+            complete = False
         status = {
-            "protocol": PROTOCOL,
+            "protocol": protocol,
             "complete": complete,
             "controller_started_at_utc": started_at,
             "controller_finished_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -383,6 +425,8 @@ def main() -> None:
             "archive_error": archive_error,
             "reset_attestation": reset_attestation,
         }
+        if is_authorized:
+            status.update(reference_check=reference, authorized_outcome=authorized_outcome)
         (destination / "controller_status.json").write_text(
             json.dumps(status, indent=2) + "\n", encoding="utf-8"
         )

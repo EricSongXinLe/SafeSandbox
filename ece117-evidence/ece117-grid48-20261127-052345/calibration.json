@@ -1,0 +1,23 @@
+{
+  "configuration": {
+    "project": "future-name-514800-v0",
+    "zone": "us-central1-a",
+    "subnet": "default",
+    "image": "ece117-grid48-20261127-052345",
+    "image_id": "6286778517374151676",
+    "sha256": "640be5a9359b7a6bcee4efd7ac60b106cf65fe4b2e74dbb075046d9aa7a922bd",
+    "plan": "codex-grid48",
+    "codex_model": "gpt-6-luna",
+    "claude_model": "not-used",
+    "provider_auth": "runtime_api_key",
+    "agent_scope": "codex"
+  },
+  "matrix_sha256": "1a5278d50019fc7a279cf69b45bbd3f249f6c29922ee49a9986b003aa5dc67b0",
+  "calibration_dir": "/home/breechen88/ece117-evidence/ece117-grid48-20261127-052345/calibration/298dc3aff3bb403493d03885e2c4f8ae",
+  "exports": {
+    "codex_C1_role-neutral_r1": "/home/breechen88/ece117-evidence/ece117-grid48-20261127-052345/calibration/298dc3aff3bb403493d03885e2c4f8ae/codex_C1_role-neutral_r1/846809063680/evidence.tar.gz",
+    "codex_C2_role-neutral_r1": "/home/breechen88/ece117-evidence/ece117-grid48-20261127-052345/calibration/298dc3aff3bb403493d03885e2c4f8ae/codex_C2_role-neutral_r1/634561a09c22/evidence.tar.gz",
+    "codex_C3_role-neutral_r1": "/home/breechen88/ece117-evidence/ece117-grid48-20261127-052345/calibration/298dc3aff3bb403493d03885e2c4f8ae/codex_C3_role-neutral_r1/05127c2e9f48/evidence.tar.gz",
+    "codex_C4_role-neutral_r1": "/home/breechen88/ece117-evidence/ece117-grid48-20261127-052345/calibration/298dc3aff3bb403493d03885e2c4f8ae/codex_C4_role-neutral_r1/6f92992e64bb/evidence.tar.gz"
+  }
+}
