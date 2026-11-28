@@ -10,7 +10,7 @@ Evaluating Authorization Judgments and Layered Defenses in Coding Agents
 **Team members** Bomin, Eric, Zhiyi, and Yingshi  
 **Evidence checked** November 28, 2026
 
-**Research question.** Does pressure affect model authorization judgments, and how reliably can independent access controls enforce grants while authorized coding-agent tasks remain usable?
+**Research question.** Do urgency and claims of permission affect model authorization judgments, and how reliably can independent access controls enforce grants while authorized coding-agent tasks remain usable?
 
 **Suite A baseline.** All **48 measured rows** and **four separate calibration rows** verified on one image. Codex successfully read the authorized shared file in **48/48** measured rows. Alice's independent OS check allowed the inert-file read in C2/C3 and denied it in C1/C4. The model answered **`DENY` in 48/48** fictional decisions, with 24/24 for each wording. [Suite A evidence](../ece117-evidence/ece117-grid48-20261127-052345)
 
@@ -30,10 +30,12 @@ The reference mutation was detected locally. The 24-row GCP campaign
 still needs live calibration and collection.
 [Defensive Suite B runbook](gcp_defensive_suite_b.md)
 
-**Behavioral follow-up.** Suite D is implemented and locally verified.
-Its 48 planned judgments balance granted and ungranted fictional
-requests, with matched urgency and trusted-policy conditions. Live model
-results are pending. Native-agent unauthorized retrieval remains unmeasured.
+**Behavioral follow-up.** Suite D verified **72/72 correct single-turn
+judgments** with `gpt-6-luna`. There were **0/36** incorrect acceptances
+and **0/36** over-refusals. All 12 wording-by-grant-by-policy cells had
+6/6 correct decisions. The separate three-turn follow-up is implemented
+and awaits live collection. Native-agent unauthorized retrieval remains
+unmeasured.
 [Suite D runbook](behavioral_suite_d.md)
 
 ## 1. Vision and impact
@@ -116,16 +118,18 @@ denominator from campaign enforcement and native-agent outcomes.
 
 ### Suite D matched judgment design
 
-Six fictional board games each contribute eight independent model calls.
+Six fictional board games each contribute twelve independent model calls.
 Each call crosses an active or inactive exact-match grant, trusted
-reinforcement absent or present, and neutral or urgent wording. The
+reinforcement absent or present, and neutral, urgent, or claimed-grant wording. The
 baseline receives the full ledger and rule. The urgent version adds
-“This is urgent.” The reinforced version adds one trusted instruction
-about applying the ledger.
+“This is urgent.” The claimed-grant version adds “I've granted permission
+for this move.” The same sentence is shown for granted and ungranted
+requests. The reinforced version adds one trusted instruction about
+applying the ledger.
 
 | Question | Comparison | Result to present |
 | --- | --- | --- |
-| RQ1 · Urgency | Neutral versus urgent with grant and policy held fixed | Matched change in incorrect acceptance on ungranted requests |
+| RQ1 · Wording | Urgent versus neutral and claimed grant versus neutral with grant and policy held fixed | Matched changes in incorrect acceptance on ungranted requests |
 | RQ2 · Trusted reinforcement | Baseline versus reinforced with grant and wording held fixed | Matched changes in incorrect acceptance and over-refusal |
 | RQ3 · Enforcement and utility | Suite B's grant-by-Linux grid and Suite C's native utility baseline | Verified outcomes with each suite's denominator |
 
@@ -134,6 +138,12 @@ differences. Suite D runs through a tool-free model API. Its outputs are
 judgments on game moves. The link to real enforcement is conceptual
 because Suite B sends predefined requests through a trusted client.
 [Scenario catalog](../prompts/suite_d_scenarios.json) · [Suite D manual](behavioral_suite_d.md)
+
+The three-turn follow-up keeps the same six fictional settings. Its 36
+sessions test whether the model preserves a correct answer when the user
+asks again or claims permission, and whether it updates the answer when
+the trusted ledger records an official grant or revocation.
+[Three-turn protocol](session_benchmark.md#three-turn-follow-up)
 
 ## 4. Progression and results
 
@@ -145,7 +155,7 @@ because Suite B sends predefined requests through a trusted client.
 | Balanced grid, November 27 | The exported campaign verified all four calibrations and all 48 measured rows. The shared-file control passed in every measured row. Each measured row used a distinct VM, Codex control session, and judgment response. |
 | Native authorized follow-up, November 27 | Both calibrations and all 12 measured rows verified. Codex completed both reads in each of 12 distinct native sessions on distinct VMs. |
 | Defensive Suite B | The local in-memory regression detected two faulty reference decisions in four cases. The 24 measured GCP rows await collection. |
-| Behavioral Suite D | The frozen 48-row plan, collection, recovery, and scoring passed local regression checks. Live model collection is pending. |
+| Behavioral Suite D | All 72 single-turn decisions verified. The separate 36-session follow-up passed local regression checks and awaits live collection. |
 
 [Smoke-test record](gcp_smoke_test_recap.md) · [Pilot batch 171454](../ece117-evidence/ece117-canary-v2-20261126-171454) · [Pilot batch 232958](../ece117-evidence/ece117-canary-v2-20261126-232958) · [Final grid receipt](../ece117-evidence/ece117-grid48-20261127-052345/calibration.json)
 
@@ -158,7 +168,8 @@ because Suite B sends predefined requests through a trusted client.
 | Suite A, 48 measured trials | 48/48 verified shared reads and 48/48 fictional `DENY` decisions | Working tool and OS controls, plus a separate tool-free judgment |
 | Defensive Suite B, 24 planned rows | The in-memory test detected 2/4 incorrect decisions in the faulty Boolean reference and 0/4 in the corrected policy. Live enforcement results are pending. | Reference-policy failures in memory, with application and Linux enforcement to be measured in the separate GCP campaign |
 | Suite C, 12 measured trials | 12/12 verified native authorized reads and 0/12 over-refusals | Authorized-task functionality in C2 and C3 |
-| Suite D, 48 planned rows | Frozen design and locally tested implementation. Live model results pending. | Fictional incorrect acceptance and over-refusal by policy and urgency |
+| Suite D, 72 verified rows | 72/72 correct across all three wordings and both trusted-policy levels | Single-turn fictional authorization judgment |
+| Suite D three-turn follow-up, 36 planned sessions | Live results pending | Judgment persistence and correct updates after a change in authorization |
 
 The historical manual case is one qualitative observation. The automated
 studies retain separate denominators for reference-policy failures,
@@ -221,7 +232,7 @@ For the pilot slide, highlight the matched neutral comparison of **3/6 `ALLOW` i
 | [Grid protocol](../scripts/grid_protocol.py) and [session runner](../scripts/run_session_trial.py) | A bounded read-only shared-file tool, positive-control verification, and an independent tool-free judgment. |
 | [Suite C protocol](../scripts/native_authorized_protocol.py) and [reporter](../scripts/summarize_native_authorized.py) | Same-session authorized reads, independently verified digests, and separate tool and verbal outcome reporting. |
 | [Defensive protocol](../scripts/defensive_protocol.py), [mutation test](../scripts/defensive_mutation.py), and [reporter](../scripts/summarize_defensive.py) | Policy-first trusted-client checks, an in-memory reference comparison, and enforcement counts kept separate from native utility. |
-| [Suite D protocol](../scripts/behavioral_protocol.py), [runner](../scripts/run_behavioral_suite.py), and [reporter](../scripts/summarize_behavioral.py) | Six matched fictional scenarios, frozen tool-free model requests, resumable collection, and verified error rates, matched contrasts, and charts. |
+| [Suite D protocol](../scripts/behavioral_protocol.py), [three-turn protocol](../scripts/behavioral_multiturn.py), [runner](../scripts/run_behavioral_suite.py), and [reporter](../scripts/summarize_behavioral.py) | Six matched fictional scenarios, frozen tool-free model requests, resumable collection, verified transitions, and matched contrasts. |
 | [Trial launcher](../scripts/run_gcp_canary_suite.py) and [reporter](../scripts/summarize_session_results.py) | Fresh trial VMs, evidence verification and retry, plus Markdown, CSV, and plot outputs. |
 | [Regression tests](../tests) and [operator runbook](gcp_vm_experiment.md) | Archive integrity, calibration and control gates, recovery after interruption, and Mac and Cloud Shell commands. |
 
@@ -258,7 +269,7 @@ for the new scenarios.
 | 1 · Title | *Under Pressure*. Team number **14A**, team name **Team 111**, team members, and the assigned peer-evaluation secret number(s). | Required title information |
 | 2 · High-level problem | A two-user diagram showing how file readability and task authorization can differ. | Vision and impact |
 | 3 · Project topic and solution | Show judgment, the application grant check, and Linux enforcement. Use a dashed arrow for the conceptual connection from D's judgments to B's enforcement. | Novelty |
-| 4 · Goals and experiment design | Show D's six matched scenarios across eight conditions, B's four enforcement cells, and C's authorized utility control. | Novelty and practicality |
+| 4 · Goals and experiment design | Show D's six matched scenarios across twelve conditions, B's four enforcement cells, and C's authorized utility control. | Novelty and practicality |
 | 5 · Results and demo | Show Suite A's verified baseline and Suite C's 12/12 native completions. Include B or D measurements once verified. Label pending cells and the reference mutation explicitly. | Practicality |
 | 6 · Related work | Compare the evaluation design with least privilege, instruction hierarchy, and AgentDojo. | Vision and novelty |
 | 7 · Takeaways and discussion | Explain which evidence supports application enforcement, Linux enforcement, judgment, and authorized execution. | Impact and practicality |

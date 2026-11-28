@@ -14,8 +14,9 @@ import re
 import sys
 import tempfile
 
+import behavioral_multiturn as multi
 from behavioral_protocol import (
-    CATALOG, PLAN, SEED, canonical, checksum, decode_decision, make_plan, matrix_bytes,
+    CATALOG, SEED, canonical, checksum, decode_decision, make_plan, matrix_bytes,
     payload, response_record,
 )
 from provider_auth import prompt_provider_keys, validate_key
@@ -51,12 +52,19 @@ def read_envelope(path: Path) -> dict:
     return data
 
 
-def create_campaign(directory: Path, model: str, seed: int) -> dict:
+def campaign_matrix(plan: dict) -> bytes:
+    if plan["protocol"] == multi.PROTOCOL:
+        return matrix_bytes(plan, multi.CSV_FIELDS)
+    return matrix_bytes(plan)
+
+
+def create_campaign(directory: Path, model: str, seed: int, design: str = "single-turn") -> dict:
     if not MODEL_ID.fullmatch(model):
         raise ValueError("specify a valid OpenAI Responses API model ID")
-    plan = make_plan(json.loads(CATALOG.read_bytes()), seed, model)
+    factory = multi.make_multiturn_plan if design == "multi-turn" else make_plan
+    plan = factory(json.loads(CATALOG.read_bytes()), seed, model)
     directory.mkdir(mode=0o700, parents=True, exist_ok=False)
-    atomic_write(directory / "matrix.csv", matrix_bytes(plan))
+    atomic_write(directory / "matrix.csv", campaign_matrix(plan))
     write_envelope(directory / "plan.json", plan)
     return plan
 
@@ -66,9 +74,14 @@ def load_campaign(directory: Path) -> tuple[dict, str]:
     model, seed = plan.get("model"), plan.get("seed")
     if not isinstance(model, str) or not MODEL_ID.fullmatch(model) or type(seed) is not int:
         raise ValueError("invalid saved model or seed")
-    if plan != make_plan(plan.get("scenarios"), seed, model):
+    scenarios, protocol = plan.get("scenarios"), plan.get("protocol")
+    if protocol == multi.PROTOCOL:
+        expected_plan = multi.make_multiturn_plan(scenarios, seed, model)
+    else:
+        expected_plan = make_plan(scenarios, seed, model, protocol=protocol)
+    if plan != expected_plan:
         raise ValueError("saved plan does not match the frozen Suite D protocol")
-    if (directory / "matrix.csv").read_bytes() != matrix_bytes(plan):
+    if (directory / "matrix.csv").read_bytes() != campaign_matrix(plan):
         raise ValueError("matrix.csv does not match the frozen plan")
     return plan, checksum(canonical(plan))
 
@@ -101,13 +114,35 @@ def read_attempts(directory: Path, row: dict, plan_hash: str, request_hash: str)
     return attempts
 
 
+def request_for_row(plan: dict, row: dict, history: dict) -> dict | None:
+    request = payload(plan, row)
+    if "session_id" in row:
+        prior = history.get(row["session_id"], [])
+        if len(prior) != 2 * (row["turn"] - 1):
+            return None
+        request["input"] = [*prior, {"role": "user", "content": row["input"]}]
+    return request
+
+
+def record_history(history: dict, row: dict, attempts: list[dict]) -> None:
+    if "session_id" in row and attempts and attempts[-1]["status"] == "evaluated":
+        messages = multi.prior_messages(row, attempts[-1]["response"])
+        history.setdefault(row["session_id"], []).extend(messages)
+
+
 def inspect_campaign(directory: Path, plan: dict, plan_hash: str) -> tuple[list[dict], str | None]:
     records = []
+    history = {}
     for row in plan["rows"]:
-        request_hash = checksum(canonical(payload(plan, row)))
+        request = request_for_row(plan, row, history)
+        request_hash = checksum(canonical(request)) if request is not None else None
         record = {"row": row, "request_sha256": request_hash, "attempts": [], "verification_error": None}
         try:
-            record["attempts"] = read_attempts(directory, row, plan_hash, request_hash)
+            if request_hash is not None:
+                record["attempts"] = read_attempts(directory, row, plan_hash, request_hash)
+                record_history(history, row, record["attempts"])
+            elif any((directory / "attempts" / row["trial_id"]).glob("*.json")):
+                raise ValueError(f"{row['trial_id']} has attempt evidence without verified prior turns")
         except (OSError, TypeError, ValueError) as error:
             record["verification_error"] = str(error)
         records.append(record)
@@ -170,7 +205,8 @@ def collect(directory: Path, execute: bool, timeout: int) -> int:
         records, model = inspect_campaign(directory, plan, plan_hash)
         verified = sum(bool(r["attempts"]) and r["attempts"][-1]["status"] in TERMINAL for r in records)
         invalid = sum(bool(r["verification_error"]) for r in records)
-        print(f"{PLAN}: {len(records)} planned; {verified} recorded outcomes; {invalid} unverified")
+        design = f"{len(records) // multi.TURNS} sessions, " if plan["protocol"] == multi.PROTOCOL else ""
+        print(f"{plan['plan']}: {design}{len(records)} planned; {verified} recorded outcomes; {invalid} unverified")
         print(f"Requested model {plan['model']}; returned model {model or 'pending'}; plan SHA-256 {plan_hash}")
         return int(bool(invalid))
     with collection_lock(directory):
@@ -178,9 +214,8 @@ def collect(directory: Path, execute: bool, timeout: int) -> int:
         records, model = inspect_campaign(directory, plan, plan_hash)
         if any(r["verification_error"] for r in records):
             raise ValueError("unverified attempt evidence; run the Suite D reporter and inspect the original evidence")
-        pending = [r for r in records if not r["attempts"] or r["attempts"][-1]["status"] not in TERMINAL]
-        if not pending:
-            print("All 48 rows have recorded outcomes. Run the reporter to check evaluated coverage.")
+        if not any(r["request_sha256"] and not finished(r) for r in records):
+            print("No runnable rows remain. Run the reporter to check evaluated coverage.")
             return 0
         key = os.environ.get("OPENAI_API_KEY")
         key = validate_key(key, "codex") if key is not None else prompt_provider_keys(("codex",))["codex"]
@@ -188,17 +223,25 @@ def collect(directory: Path, execute: bool, timeout: int) -> int:
             attempt["response"]["id"]
             for record in records for attempt in record["attempts"] if attempt["status"] == "evaluated"
         }
-        for record in pending:
-            row_id = record["row"]["trial_id"]
+        history = {}
+        for record in records:
+            row = record["row"]
+            if finished(record):
+                record_history(history, row, record["attempts"])
+                continue
+            request = request_for_row(plan, row, history)
+            if request is None:
+                continue
+            row_id = row["trial_id"]
             sequence = len(record["attempts"]) + 1
             target = directory / "attempts" / row_id / f"{sequence:06}.json"
             target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             attempt = {
                 "trial_id": row_id, "sequence": sequence, "plan_sha256": plan_hash,
-                "request_sha256": record["request_sha256"], "status": "started", "started_at_utc": utc_now(),
+                "request_sha256": checksum(canonical(request)), "status": "started", "started_at_utc": utc_now(),
             }
             write_envelope(target, attempt)
-            status, outcome = request_decision(payload(plan, record["row"]), key, timeout)
+            status, outcome = request_decision(request, key, timeout)
             if status == "evaluated":
                 returned, response_id = (outcome["response"][field] for field in ("model", "id"))
                 if model is not None and returned != model:
@@ -215,8 +258,13 @@ def collect(directory: Path, execute: bool, timeout: int) -> int:
                 detail = f" (HTTP {outcome['http_status']})" if status == "http_error" else ""
                 print(f"Collection stopped at {row_id}{detail}. Evidence saved in {target}.", file=sys.stderr)
                 return 1
+            record_history(history, row, [attempt])
         print("Collection finished. Run the reporter to check evaluated coverage.")
         return 0
+
+
+def finished(record: dict) -> bool:
+    return bool(record["attempts"]) and record["attempts"][-1]["status"] in TERMINAL
 
 
 def main() -> int:
@@ -226,6 +274,7 @@ def main() -> int:
     plan_cmd.add_argument("--output", required=True, type=Path)
     plan_cmd.add_argument("--model", required=True)
     plan_cmd.add_argument("--seed", type=int, default=SEED)
+    plan_cmd.add_argument("--design", choices=("single-turn", "multi-turn"), default="single-turn")
     run_cmd = commands.add_parser("run", help="preview or resume the frozen campaign")
     run_cmd.add_argument("--campaign", required=True, type=Path)
     run_cmd.add_argument("--execute", action="store_true", help="send the model requests")
@@ -233,7 +282,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         if args.command == "plan":
-            plan = create_campaign(args.output, args.model, args.seed)
+            plan = create_campaign(args.output, args.model, args.seed, args.design)
             print(f"Froze {len(plan['rows'])} Suite D rows in {args.output}")
             return 0
         if args.timeout < 1:

@@ -44,6 +44,9 @@ guest_prepare() {
     cd "$stage"
     PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
     bash -n scripts/vm/reset_fixture.sh
+    if [[ -f scripts/vm/reset_native_pilot_fixture.sh ]]; then
+      bash -n scripts/vm/reset_native_pilot_fixture.sh
+    fi
   )
 
   if ! getent passwd alice >/dev/null; then
@@ -71,6 +74,9 @@ guest_prepare() {
   sudo -n chown -R root:root "$install_dir"
   sudo -n chmod -R go-w "$install_dir"
   sudo -n chmod 0755 "$install_dir" "$install_dir/scripts/vm/reset_fixture.sh"
+  if [[ -f "$stage/scripts/vm/reset_native_pilot_fixture.sh" ]]; then
+    sudo -n chmod 0755 "$install_dir/scripts/vm/reset_native_pilot_fixture.sh"
+  fi
   printf '%s  %s\n' "$sha" ece117-canary-v2.tar.gz > "$stage/BUNDLE.sha256"
   sudo -n install -o root -g root -m 0644 "$stage/BUNDLE.sha256" "$install_dir/BUNDLE.sha256"
   sudo -n mv -nT "$install_dir" /opt/ece117
